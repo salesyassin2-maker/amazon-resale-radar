@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+from bs4 import BeautifulSoup
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, HTTPException
@@ -24,14 +25,10 @@ from scraper import (
     parse_resale_html,
 )
 
-
-# ---------------- CONFIGURATION ----------------
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s"
 )
-
 logger = logging.getLogger("resale-radar")
 
 ROOT = Path(__file__).resolve().parent
@@ -86,8 +83,6 @@ session.headers.update({
 })
 
 
-# ---------------- DATABASE ----------------
-
 def connect():
     conn = sqlite3.connect(DB_PATH, timeout=20)
     conn.row_factory = sqlite3.Row
@@ -128,8 +123,6 @@ def init_db():
         db.commit()
 
 
-# ---------------- AMAZON FETCH ----------------
-
 def fetch_page(page: int) -> str:
 
     params = dict(SEARCH_PARAMS)
@@ -149,11 +142,10 @@ def fetch_page(page: int) -> str:
 
             logger.info(
                 "Amazon page %s: HTTP %s | attempt %s | "
-                "content-type=%s | bytes=%s | url=%s",
+                "bytes=%s | url=%s",
                 page,
                 response.status_code,
                 attempt,
-                response.headers.get("Content-Type", "unknown"),
                 len(response.content),
                 response.url
             )
@@ -161,60 +153,32 @@ def fetch_page(page: int) -> str:
             if response.status_code in (429, 500, 502, 503, 504):
 
                 if attempt < 3:
-
-                    wait_seconds = attempt * 30
-
-                    logger.warning(
-                        "Temporary Amazon error %s on page %s. "
-                        "Retrying after %s seconds.",
-                        response.status_code,
-                        page,
-                        wait_seconds
-                    )
-
-                    time.sleep(wait_seconds)
+                    time.sleep(attempt * 30)
                     continue
-
-                response.raise_for_status()
 
             response.raise_for_status()
 
             html = response.text
             lowered = html.lower()
 
-            captcha_terms = (
+            if any(term in lowered for term in (
                 "captcha",
                 "robot check",
                 "validatecaptcha",
                 "enter the characters you see below",
-            )
-
-            if any(term in lowered for term in captcha_terms):
-
-                logger.error(
-                    "Amazon CAPTCHA detected on page %s",
-                    page
-                )
-
+            )):
                 raise RuntimeError(
                     f"Amazon CAPTCHA detected on page {page}"
                 )
 
-            logger.info(
-                "Amazon page %s downloaded successfully. HTML length=%s",
-                page,
-                len(html)
-            )
-
             return html
 
-        except requests.RequestException as exc:
+        except requests.RequestException:
 
             logger.exception(
-                "Request failed on page %s, attempt %s: %s",
+                "Request failed on page %s, attempt %s",
                 page,
-                attempt,
-                exc
+                attempt
             )
 
             if attempt == 3:
@@ -227,7 +191,56 @@ def fetch_page(page: int) -> str:
     )
 
 
-# ---------------- SAVE PRODUCTS ----------------
+def diagnose_page(html: str, page: int):
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    selectors = [
+        '[data-component-type="s-search-result"]',
+        '.s-result-item[data-asin]',
+        '[data-asin]',
+        '[data-csa-c-item-id]',
+        'raw-html',
+    ]
+
+    logger.info("========== PAGE %s DIAGNOSTIC ==========", page)
+
+    for selector in selectors:
+
+        found = soup.select(selector)
+
+        logger.info(
+            "Page %s selector %s: %s matches",
+            page,
+            selector,
+            len(found)
+        )
+
+        if found and selector != "raw-html":
+
+            sample = found[0].prettify()[:6000]
+
+            logger.info(
+                "Page %s sample for %s:\n%s",
+                page,
+                selector,
+                sample
+            )
+
+    asin_nodes = soup.find_all(attrs={"data-asin": True})
+
+    for node in asin_nodes[:5]:
+
+        logger.info(
+            "Page %s ASIN sample: asin=%s | tag=%s | classes=%s",
+            page,
+            node.get("data-asin"),
+            node.name,
+            node.get("class")
+        )
+
+    logger.info("========== END DIAGNOSTIC ==========")
+
 
 def save_products(products: list[dict]) -> int:
 
@@ -293,8 +306,6 @@ def save_products(products: list[dict]) -> int:
     return inserted
 
 
-# ---------------- SCAN PROGRESS ----------------
-
 def save_progress(next_page: int, completed: bool):
 
     now = datetime.now(timezone.utc).isoformat()
@@ -313,8 +324,6 @@ def save_progress(next_page: int, completed: bool):
 
         db.commit()
 
-
-# ---------------- MAIN SCAN ----------------
 
 def run_check() -> dict:
 
@@ -353,21 +362,9 @@ def run_check() -> dict:
         html = fetch_page(page)
 
         logger.info(
-            "Parsing page %s. HTML size: %s characters",
+            "Page %s downloaded. HTML length=%s",
             page,
             len(html)
-        )
-
-        lowered = html.lower()
-
-        logger.info(
-            "Page %s diagnostics: title=%s | "
-            "search-result-marker=%s | asin-marker=%s | captcha=%s",
-            page,
-            "title" in lowered,
-            "s-search-result" in lowered,
-            "data-asin" in lowered,
-            "captcha" in lowered or "robot check" in lowered
         )
 
         products = parse_resale_html(html)
@@ -380,17 +377,12 @@ def run_check() -> dict:
 
         if not products:
 
-            logger.error(
-                "No products parsed on page %s. "
-                "HTML preview: %s",
-                page,
-                html[:1500].replace("\n", " ")
-            )
+            diagnose_page(html, page)
 
             raise RuntimeError(
                 f"No products parsed on page {page}. "
-                f"Diagnostic details were written to Render logs. "
-                f"Progress saved; this page will be retried."
+                "Diagnostic samples were written to Render logs. "
+                "Progress saved; this page will be retried."
             )
 
         new_count = save_products(products)
@@ -407,8 +399,7 @@ def run_check() -> dict:
         now = datetime.now(timezone.utc).isoformat()
 
         logger.info(
-            "Page %s completed successfully. "
-            "New products=%s. Next page=%s",
+            "Page %s completed. New=%s. Next page=%s",
             page,
             new_count,
             next_page
@@ -433,17 +424,12 @@ def run_check() -> dict:
     return result
 
 
-# ---------------- STARTUP ----------------
-
 @app.on_event("startup")
 def startup():
 
     init_db()
 
-    logger.info(
-        "Application started. Database=%s",
-        DB_PATH
-    )
+    logger.info("Application started. Database=%s", DB_PATH)
 
     if os.getenv("RUN_SCHEDULER", "1") == "1":
 
@@ -470,8 +456,6 @@ def shutdown():
     if scheduler.running:
         scheduler.shutdown(wait=False)
 
-
-# ---------------- WEBSITE ----------------
 
 @app.get("/")
 def home():
