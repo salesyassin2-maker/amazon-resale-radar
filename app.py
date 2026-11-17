@@ -9,9 +9,9 @@ import logging
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs
 
 import requests
-from bs4 import BeautifulSoup
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, HTTPException
@@ -19,9 +19,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from scraper import (
-    BASE_URL,
-    MAX_PAGES,
-    SEARCH_PARAMS,
+    build_start_url,
+    extract_next_page_url,
     parse_resale_html,
 )
 
@@ -29,6 +28,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s"
 )
+
 logger = logging.getLogger("resale-radar")
 
 ROOT = Path(__file__).resolve().parent
@@ -37,7 +37,6 @@ DB_PATH = Path(
     os.getenv("DATABASE_PATH", ROOT / "resale.db")
 )
 
-# بدء دورة الفحص كل 30 ثانية
 INTERVAL_SECONDS = max(
     30,
     int(os.getenv("CHECK_INTERVAL_SECONDS", "30"))
@@ -52,15 +51,9 @@ PAGE_DELAY = max(
     int(os.getenv("PAGE_DELAY_SECONDS", "5"))
 )
 
-MAX_PAGES_PER_RUN = max(
-    2,
+MAX_BATCHES_PER_RUN = max(
+    1,
     int(os.getenv("MAX_PAGES_PER_RUN", "10"))
-)
-
-RECENT_PAGES_PER_RUN = 3
-
-DEEP_PAGES_PER_RUN = (
-    MAX_PAGES_PER_RUN - RECENT_PAGES_PER_RUN
 )
 
 app = FastAPI(title="Amazon Resale Radar")
@@ -91,7 +84,7 @@ session.headers.update({
 
 
 def connect():
-    conn = sqlite3.connect(DB_PATH, timeout=20)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -121,6 +114,19 @@ def init_db():
             )
         """)
 
+        columns = {
+            row["name"]
+            for row in db.execute(
+                "PRAGMA table_info(scan_state)"
+            ).fetchall()
+        }
+
+        if "next_url" not in columns:
+            db.execute("""
+                ALTER TABLE scan_state
+                ADD COLUMN next_url TEXT
+            """)
+
         db.execute("""
             INSERT OR IGNORE INTO scan_state
             (id, next_page, completed)
@@ -130,27 +136,34 @@ def init_db():
         db.commit()
 
 
-def fetch_page(page: int) -> str:
+def page_number_from_url(url: str | None) -> int:
 
-    params = dict(SEARCH_PARAMS)
-    params["page"] = page
+    if not url:
+        return 1
 
-    logger.info("Starting Amazon page %s", page)
+    try:
+        values = parse_qs(urlparse(url).query)
+        return int(values.get("page", ["1"])[0])
+    except (ValueError, TypeError):
+        return 1
+
+
+def fetch_url(url: str) -> tuple[str, str]:
+
+    logger.info("Requesting Amazon URL: %s", url)
 
     for attempt in range(1, 4):
 
         try:
 
             response = session.get(
-                BASE_URL,
-                params=params,
+                url,
                 timeout=REQUEST_TIMEOUT
             )
 
             logger.info(
-                "Amazon page %s: HTTP %s | attempt %s | "
-                "bytes=%s | url=%s",
-                page,
+                "Amazon response: HTTP %s | attempt=%s | "
+                "bytes=%s | final_url=%s",
                 response.status_code,
                 attempt,
                 len(response.content),
@@ -177,16 +190,15 @@ def fetch_page(page: int) -> str:
                 "enter the characters you see below",
             )):
                 raise RuntimeError(
-                    f"Amazon CAPTCHA detected on page {page}"
+                    "Amazon CAPTCHA detected"
                 )
 
-            return html
+            return html, response.url
 
         except requests.RequestException:
 
             logger.exception(
-                "Request failed on page %s, attempt %s",
-                page,
+                "Request failed, attempt %s",
                 attempt
             )
 
@@ -195,67 +207,7 @@ def fetch_page(page: int) -> str:
 
             time.sleep(attempt * 30)
 
-    raise RuntimeError(
-        f"Could not download Amazon page {page}"
-    )
-
-
-def diagnose_page(html: str, page: int):
-
-    soup = BeautifulSoup(html, "html.parser")
-
-    selectors = [
-        '[data-component-type="s-search-result"]',
-        '.s-result-item[data-asin]',
-        '[data-asin]',
-        '[data-csa-c-item-id]',
-        'raw-html',
-    ]
-
-    logger.info(
-        "========== PAGE %s DIAGNOSTIC ==========",
-        page
-    )
-
-    for selector in selectors:
-
-        found = soup.select(selector)
-
-        logger.info(
-            "Page %s selector %s: %s matches",
-            page,
-            selector,
-            len(found)
-        )
-
-        if found and selector != "raw-html":
-
-            sample = found[0].prettify()[:6000]
-
-            logger.info(
-                "Page %s sample for %s:\n%s",
-                page,
-                selector,
-                sample
-            )
-
-    asin_nodes = soup.find_all(
-        attrs={"data-asin": True}
-    )
-
-    for node in asin_nodes[:5]:
-
-        logger.info(
-            "Page %s ASIN sample: asin=%s | tag=%s | classes=%s",
-            page,
-            node.get("data-asin"),
-            node.name,
-            node.get("class")
-        )
-
-    logger.info(
-        "========== END DIAGNOSTIC =========="
-    )
+    raise RuntimeError("Could not download Amazon page")
 
 
 def save_products(products: list[dict]) -> int:
@@ -268,11 +220,11 @@ def save_products(products: list[dict]) -> int:
 
     with closing(connect()) as db:
 
-        for p in products:
+        for product in products:
 
             existing = db.execute(
                 "SELECT asin FROM products WHERE asin=?",
-                (p["asin"],)
+                (product["asin"],)
             ).fetchone()
 
             if existing:
@@ -283,12 +235,12 @@ def save_products(products: list[dict]) -> int:
                         product_url=?, last_seen=?
                     WHERE asin=?
                 """, (
-                    p["title"],
-                    p["price"],
-                    p["image_url"],
-                    p["product_url"],
+                    product["title"],
+                    product["price"],
+                    product["image_url"],
+                    product["product_url"],
                     now,
-                    p["asin"]
+                    product["asin"]
                 ))
 
             else:
@@ -300,11 +252,11 @@ def save_products(products: list[dict]) -> int:
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    p["asin"],
-                    p["title"],
-                    p["price"],
-                    p["image_url"],
-                    p["product_url"],
+                    product["asin"],
+                    product["title"],
+                    product["price"],
+                    product["image_url"],
+                    product["product_url"],
                     now,
                     now
                 ))
@@ -314,7 +266,7 @@ def save_products(products: list[dict]) -> int:
         db.commit()
 
     logger.info(
-        "Saved %s products. Newly inserted: %s",
+        "Saved products=%s | newly inserted=%s",
         len(products),
         inserted
     )
@@ -322,17 +274,26 @@ def save_products(products: list[dict]) -> int:
     return inserted
 
 
-def save_progress(next_page: int, completed: bool):
+def save_progress(
+    next_url: str | None,
+    completed: bool
+):
 
     now = datetime.now(timezone.utc).isoformat()
+
+    next_page = page_number_from_url(next_url)
 
     with closing(connect()) as db:
 
         db.execute("""
             UPDATE scan_state
-            SET next_page=?, completed=?, last_success=?
+            SET next_url=?,
+                next_page=?,
+                completed=?,
+                last_success=?
             WHERE id=1
         """, (
+            next_url,
             next_page,
             int(completed),
             now
@@ -341,38 +302,43 @@ def save_progress(next_page: int, completed: bool):
         db.commit()
 
 
-def scan_one_page(page: int) -> tuple[int, int]:
+def scan_page(url: str) -> dict:
 
-    html = fetch_page(page)
-
-    logger.info(
-        "Page %s downloaded. HTML length=%s",
-        page,
-        len(html)
-    )
+    html, final_url = fetch_url(url)
 
     products = parse_resale_html(html)
 
-    logger.info(
-        "Page %s parsing result: %s products",
-        page,
-        len(products)
+    next_url = extract_next_page_url(
+        html,
+        final_url
     )
 
-    if not products:
+    new_count = 0
 
+    if products:
+        new_count = save_products(products)
+
+    logger.info(
+        "Page scan result: products=%s | new=%s | "
+        "has_next=%s | url=%s",
+        len(products),
+        new_count,
+        bool(next_url),
+        final_url
+    )
+
+    if not products and not next_url:
         logger.warning(
-            "Page %s has no products. Skipping.",
-            page
+            "No products and no next-page link. "
+            "Amazon may have returned an empty or unexpected page."
         )
 
-        diagnose_page(html, page)
-
-        return 0, 0
-
-    new_count = save_products(products)
-
-    return len(products), new_count
+    return {
+        "url": final_url,
+        "products": len(products),
+        "new": new_count,
+        "next_url": next_url,
+    }
 
 
 def run_check() -> dict:
@@ -383,114 +349,135 @@ def run_check() -> dict:
             "SELECT * FROM scan_state WHERE id=1"
         ).fetchone()
 
-    recent_start = 1
-
-    recent_end = min(
-        RECENT_PAGES_PER_RUN,
-        MAX_PAGES
-    )
-
-    deep_start = state["next_page"]
-
-    if state["completed"] or deep_start <= RECENT_PAGES_PER_RUN:
-        deep_start = RECENT_PAGES_PER_RUN + 1
+    start_url = build_start_url()
 
     pages_scanned = 0
-    empty_pages = 0
     parsed_total = 0
     new_total = 0
-
-    logger.info(
-        "Recent scan started: pages %s to %s",
-        recent_start,
-        recent_end
-    )
-
-    # فحص أحدث المنتجات في كل دورة
-    for page in range(recent_start, recent_end + 1):
-
-        parsed, new_count = scan_one_page(page)
-
-        pages_scanned += 1
-        parsed_total += parsed
-        new_total += new_count
-
-        if parsed == 0:
-            empty_pages += 1
-
-        if page < recent_end:
-            time.sleep(PAGE_DELAY)
-
-    # استكمال بقية صفحات المخزون
-    deep_end = min(
-        deep_start + DEEP_PAGES_PER_RUN - 1,
-        MAX_PAGES
-    )
-
-    logger.info(
-        "Deep scan started: pages %s to %s",
-        deep_start,
-        deep_end
-    )
-
-    next_page = deep_start
     completed = False
 
-    if deep_start <= MAX_PAGES:
+    logger.info("Starting fresh first-page check")
 
-        for page in range(deep_start, deep_end + 1):
+    # فحص الصفحة الأولى في كل دورة لاكتشاف الإضافات الجديدة
+    first_result = scan_page(start_url)
 
-            parsed, new_count = scan_one_page(page)
+    pages_scanned += 1
+    parsed_total += first_result["products"]
+    new_total += first_result["new"]
 
-            pages_scanned += 1
-            parsed_total += parsed
-            new_total += new_count
+    first_next_url = first_result["next_url"]
 
-            if parsed == 0:
-                empty_pages += 1
+    # استكمال الفحص العميق من آخر رابط محفوظ
+    deep_url = state["next_url"] or first_next_url
 
-            completed = page >= MAX_PAGES
+    # إذا لم يوجد رابط تالٍ، فلا توجد صفحات يمكن استكمالها
+    if not deep_url:
 
-            next_page = (
-                RECENT_PAGES_PER_RUN + 1
-                if completed
-                else page + 1
+        save_progress(None, True)
+
+        return {
+            "pages_scanned": pages_scanned,
+            "parsed": parsed_total,
+            "new": new_total,
+            "completed": True,
+            "next_page": 1,
+            "message": "No next-page link was found.",
+            "checked_at": datetime.now(
+                timezone.utc
+            ).isoformat(),
+        }
+
+    visited = {start_url}
+    last_next_url = deep_url
+
+    for batch_number in range(1, MAX_BATCHES_PER_RUN + 1):
+
+        if not deep_url:
+            completed = True
+            break
+
+        if deep_url in visited:
+
+            logger.warning(
+                "Repeated page URL detected. "
+                "Restarting catalog cycle."
             )
 
-            save_progress(next_page, completed)
+            deep_url = first_next_url
+            completed = True
+            break
+
+        visited.add(deep_url)
+
+        logger.info(
+            "Deep scan batch %s/%s",
+            batch_number,
+            MAX_BATCHES_PER_RUN
+        )
+
+        result = scan_page(deep_url)
+
+        pages_scanned += 1
+        parsed_total += result["products"]
+        new_total += result["new"]
+
+        next_url = result["next_url"]
+
+        if not next_url:
 
             logger.info(
-                "Deep page %s completed. Parsed=%s | "
-                "New=%s | Next page=%s",
-                page,
-                parsed,
-                new_count,
-                next_page
+                "No further page link found. "
+                "Catalog traversal reached its end."
             )
 
-            if page < deep_end:
-                time.sleep(PAGE_DELAY)
+            completed = True
+            deep_url = first_next_url
+            break
+
+        if next_url in visited:
+
+            logger.warning(
+                "Amazon returned a repeated next-page link."
+            )
+
+            completed = True
+            deep_url = first_next_url
+            break
+
+        deep_url = next_url
+        last_next_url = deep_url
+
+        save_progress(
+            deep_url,
+            False
+        )
+
+        if batch_number < MAX_BATCHES_PER_RUN:
+            time.sleep(PAGE_DELAY)
+
+    if completed:
+
+        save_progress(
+            deep_url,
+            True
+        )
 
     else:
 
-        next_page = RECENT_PAGES_PER_RUN + 1
-        completed = True
-
-        save_progress(next_page, completed)
-
-    now = datetime.now(timezone.utc).isoformat()
+        save_progress(
+            deep_url or last_next_url,
+            False
+        )
 
     result = {
         "pages_scanned": pages_scanned,
-        "recent_pages": recent_end - recent_start + 1,
-        "deep_first_page": deep_start,
-        "deep_last_page": deep_end,
         "parsed": parsed_total,
         "new": new_total,
-        "empty_pages": empty_pages,
-        "initial_scan_completed": completed,
-        "next_page": next_page,
-        "checked_at": now,
+        "completed": completed,
+        "next_page": page_number_from_url(deep_url),
+        "checked_at": datetime.now(
+            timezone.utc
+        ).isoformat(),
     }
 
     logger.info("Scan finished: %s", result)
@@ -573,7 +560,9 @@ def status():
         "interval_seconds": INTERVAL_SECONDS,
         "scheduler_running": scheduler.running,
         "next_page": state["next_page"],
-        "initial_scan_completed": bool(state["completed"]),
+        "initial_scan_completed": bool(
+            state["completed"]
+        ),
         "last_success": state["last_success"],
     }
 
