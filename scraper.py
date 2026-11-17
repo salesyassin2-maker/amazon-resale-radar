@@ -25,10 +25,22 @@ def _clean(text: str) -> str:
 
 
 def _price(text: str) -> float | None:
-    match = re.search(
-        r"([\d,]+(?:\.\d{1,2})?)\s*جنيه",
-        text or ""
+    if not text:
+        return None
+
+    text = text.translate(
+        str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
     )
+
+    text = text.translate(
+        str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+    )
+
+    match = re.search(
+        r"([\d,]+(?:\.\d{1,2})?)",
+        text.replace("٬", ",").replace("٫", ".")
+    )
+
     if not match:
         return None
 
@@ -38,90 +50,176 @@ def _price(text: str) -> float | None:
         return None
 
 
+def _get_asin(card) -> str:
+    asin = card.get("data-asin", "").strip()
+
+    if re.fullmatch(r"[A-Z0-9]{10}", asin):
+        return asin
+
+    raw_id = card.get("data-csa-c-item-id", "")
+    match = re.search(r"([A-Z0-9]{10})$", raw_id)
+
+    if match:
+        return match.group(1)
+
+    for link in card.find_all("a", href=True):
+        match = re.search(
+            r"/(?:dp|gp/product)/([A-Z0-9]{10})",
+            link["href"]
+        )
+        if match:
+            return match.group(1)
+
+    return ""
+
+
+def _get_title(card) -> str:
+    node = card.select_one("h2")
+
+    if node:
+        title = _clean(node.get_text(" ", strip=True))
+        if title:
+            return title
+
+    node = card.select_one(
+        ".a-text-normal, [class*='product-title']"
+    )
+
+    if node:
+        return _clean(node.get_text(" ", strip=True))
+
+    return ""
+
+
+def _get_image(card):
+    img = card.find("img")
+
+    if not img:
+        return None
+
+    image = (
+        img.get("src")
+        or img.get("data-src")
+        or img.get("data-old-hires")
+    )
+
+    if image and image.startswith("//"):
+        image = "https:" + image
+
+    if image:
+        return image
+
+    dynamic = img.get("data-a-dynamic-image")
+
+    if dynamic:
+        try:
+            return next(iter(json.loads(dynamic)))
+        except (ValueError, TypeError, StopIteration):
+            pass
+
+    return None
+
+
+def _get_link(card, asin: str) -> str:
+    for a in card.find_all("a", href=True):
+        href = a["href"]
+
+        if (
+            f"/dp/{asin}" in href
+            or f"/gp/product/{asin}" in href
+        ):
+            return urljoin(
+                "https://www.amazon.eg",
+                href.split("?")[0]
+            )
+
+    return f"https://www.amazon.eg/dp/{asin}"
+
+
+def _get_price(card):
+    selectors = [
+        '[data-cy="secondary-offer-recipe"]',
+        ".a-price .a-offscreen",
+        ".a-price-whole",
+        "[data-a-color='price']",
+    ]
+
+    for selector in selectors:
+        node = card.select_one(selector)
+
+        if node:
+            price = _price(node.get_text(" ", strip=True))
+            if price is not None:
+                return price
+
+    return None
+
+
 def parse_resale_html(html: str) -> list[dict]:
     outer = BeautifulSoup(html, "html.parser")
+
     cards = {}
 
     payloads = [
         node.get("data-payload", "")
         for node in outer.find_all("raw-html")
+        if node.get("data-payload")
     ]
+
     payloads.append(str(outer))
 
     for payload in payloads:
-        inner = BeautifulSoup(unescape(payload), "html.parser")
-
-        product_cards = inner.select(
-            '[data-component-type="s-search-result"][data-asin]'
+        inner = BeautifulSoup(
+            unescape(payload),
+            "html.parser"
         )
 
-        product_cards += inner.find_all(
-            attrs={"data-csa-c-item-id": True}
+        product_cards = []
+
+        product_cards.extend(
+            inner.select(
+                '[data-component-type="s-search-result"]'
+            )
+        )
+
+        product_cards.extend(
+            inner.select(
+                ".s-result-item[data-asin]"
+            )
+        )
+
+        product_cards.extend(
+            inner.find_all(
+                attrs={"data-csa-c-item-id": True}
+            )
+        )
+
+        product_cards.extend(
+            inner.find_all(
+                attrs={"data-asin": True}
+            )
         )
 
         for card in product_cards:
-            asin = card.get("data-asin", "")
+            asin = _get_asin(card)
 
             if not asin:
-                raw_id = card.get("data-csa-c-item-id", "")
-                match = re.search(r"([A-Z0-9]{10})$", raw_id)
-                asin = match.group(1) if match else ""
-
-            if not re.fullmatch(r"[A-Z0-9]{10}", asin):
                 continue
 
-            title_node = card.select_one("h2")
-            if not title_node:
+            if asin in cards:
                 continue
 
-            title = _clean(title_node.get_text(" ", strip=True))
+            title = _get_title(card)
+
             if not title:
                 continue
-
-            image = None
-            img = card.find("img")
-
-            if img:
-                image = img.get("src") or img.get("data-src")
-
-                if not image:
-                    dynamic = img.get("data-a-dynamic-image")
-                    if dynamic:
-                        try:
-                            image = next(iter(json.loads(dynamic)))
-                        except (ValueError, TypeError):
-                            pass
-
-            link = None
-
-            for a in card.find_all("a", href=True):
-                href = a["href"]
-                if f"/dp/{asin}" in href:
-                    link = urljoin(
-                        "https://www.amazon.eg",
-                        href.split("&amp;")[0]
-                    )
-                    break
-
-            if not link:
-                link = f"https://www.amazon.eg/dp/{asin}"
-
-            price_node = (
-                card.select_one('[data-cy="secondary-offer-recipe"]')
-                or card.select_one(".a-price .a-offscreen")
-            )
-
-            price_text = (
-                price_node.get_text(" ", strip=True)
-                if price_node else ""
-            )
 
             cards[asin] = {
                 "asin": asin,
                 "title": title,
-                "price": _price(price_text),
-                "image_url": image,
-                "product_url": link,
+                "price": _get_price(card),
+                "image_url": _get_image(card),
+                "product_url": _get_link(card, asin),
             }
 
     return list(cards.values())
