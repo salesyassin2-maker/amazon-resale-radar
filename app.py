@@ -39,7 +39,7 @@ REQUEST_TIMEOUT = int(
 )
 
 PAGE_DELAY = max(
-    3,
+    5,
     int(os.getenv("PAGE_DELAY_SECONDS", "5"))
 )
 
@@ -215,60 +215,61 @@ def run_check() -> dict:
         MAX_PAGES
     )
 
-    all_products = {}
-
     pages_scanned = 0
+    parsed_total = 0
+    new_total = 0
+
+    completed = False
+    next_page = start_page
+    now = None
 
     for page in range(start_page, end_page + 1):
 
         html = fetch_page(page)
-
         products = parse_resale_html(html)
 
         if not products:
             raise RuntimeError(
                 f"No products parsed on page {page}. "
-                "Scan stopped; progress was not advanced."
+                f"Progress saved. Page {page} will be retried."
             )
 
-        for product in products:
-            all_products[product["asin"]] = product
+        # Save each successful page immediately.
+        new_count = save_products(products)
 
+        new_total += new_count
+        parsed_total += len(products)
         pages_scanned += 1
+
+        completed = page >= MAX_PAGES
+        next_page = 1 if completed else page + 1
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Save progress after every successful page.
+        with closing(connect()) as db:
+
+            db.execute("""
+                UPDATE scan_state
+                SET next_page=?, completed=?, last_success=?
+                WHERE id=1
+            """, (
+                next_page,
+                int(completed),
+                now
+            ))
+
+            db.commit()
 
         if page < end_page:
             time.sleep(PAGE_DELAY)
 
-    new_count = save_products(
-        list(all_products.values())
-    )
-
-    completed = end_page >= MAX_PAGES
-
-    next_page = 1 if completed else end_page + 1
-
-    now = datetime.now(timezone.utc).isoformat()
-
-    with closing(connect()) as db:
-
-        db.execute("""
-            UPDATE scan_state
-            SET next_page=?, completed=?, last_success=?
-            WHERE id=1
-        """, (
-            next_page,
-            int(completed),
-            now
-        ))
-
-        db.commit()
-
     return {
         "pages_scanned": pages_scanned,
         "first_page": start_page,
-        "last_page": end_page,
-        "parsed": len(all_products),
-        "new": new_count,
+        "last_page": start_page + pages_scanned - 1,
+        "parsed": parsed_total,
+        "new": new_total,
         "initial_scan_completed": completed,
         "next_page": next_page,
         "checked_at": now,
