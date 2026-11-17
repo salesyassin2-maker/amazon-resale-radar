@@ -1,517 +1,221 @@
 
 from __future__ import annotations
 
-import os
-import time
-import sqlite3
-import logging
+import json
+import re
+from html import unescape
+from urllib.parse import urljoin
 
-from contextlib import closing
-from datetime import datetime, timezone
-from pathlib import Path
-
-import requests
 from bs4 import BeautifulSoup
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+BASE_URL = "https://www.amazon.eg/s"
+MAX_PAGES = 187
 
-from scraper import (
-    BASE_URL,
-    MAX_PAGES,
-    SEARCH_PARAMS,
-    parse_resale_html,
-)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s"
-)
-logger = logging.getLogger("resale-radar")
-
-ROOT = Path(__file__).resolve().parent
-
-DB_PATH = Path(
-    os.getenv("DATABASE_PATH", ROOT / "resale.db")
-)
-
-INTERVAL_SECONDS = max(
-    1800,
-    int(os.getenv("CHECK_INTERVAL_SECONDS", "1800"))
-)
-
-REQUEST_TIMEOUT = int(
-    os.getenv("REQUEST_TIMEOUT_SECONDS", "30")
-)
-
-PAGE_DELAY = max(
-    10,
-    int(os.getenv("PAGE_DELAY_SECONDS", "10"))
-)
-
-MAX_PAGES_PER_RUN = max(
-    1,
-    int(os.getenv("MAX_PAGES_PER_RUN", "10"))
-)
-
-app = FastAPI(title="Amazon Resale Radar")
-
-app.mount(
-    "/static",
-    StaticFiles(directory=ROOT / "static"),
-    name="static"
-)
-
-scheduler = BackgroundScheduler(timezone="UTC")
-
-session = requests.Session()
-
-session.headers.update({
-    "User-Agent": os.getenv(
-        "AMAZON_USER_AGENT",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/130.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "ar-EG,ar;q=0.9,en;q=0.7",
-    "Accept": (
-        "text/html,application/xhtml+xml,"
-        "application/xml;q=0.9,*/*;q=0.8"
-    ),
-})
+SEARCH_PARAMS = {
+    "i": "warehouse-deals",
+    "srs": "27972173031",
+    "bbn": "27972173031",
+    "s": "relevanceblender",
+    "fs": "true",
+}
 
 
-def connect():
-    conn = sqlite3.connect(DB_PATH, timeout=20)
-    conn.row_factory = sqlite3.Row
-    return conn
+def _clean(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
 
 
-def init_db():
+def _price(text: str) -> float | None:
+    if not text:
+        return None
 
-    with closing(connect()) as db:
-
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS products (
-                asin TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                price REAL,
-                image_url TEXT,
-                product_url TEXT NOT NULL,
-                first_seen TEXT NOT NULL,
-                last_seen TEXT NOT NULL
-            )
-        """)
-
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS scan_state (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                next_page INTEGER NOT NULL DEFAULT 1,
-                completed INTEGER NOT NULL DEFAULT 0,
-                last_success TEXT
-            )
-        """)
-
-        db.execute("""
-            INSERT OR IGNORE INTO scan_state
-            (id, next_page, completed)
-            VALUES (1, 1, 0)
-        """)
-
-        db.commit()
-
-
-def fetch_page(page: int) -> str:
-
-    params = dict(SEARCH_PARAMS)
-    params["page"] = page
-
-    logger.info("Starting Amazon page %s", page)
-
-    for attempt in range(1, 4):
-
-        try:
-
-            response = session.get(
-                BASE_URL,
-                params=params,
-                timeout=REQUEST_TIMEOUT
-            )
-
-            logger.info(
-                "Amazon page %s: HTTP %s | attempt %s | "
-                "bytes=%s | url=%s",
-                page,
-                response.status_code,
-                attempt,
-                len(response.content),
-                response.url
-            )
-
-            if response.status_code in (429, 500, 502, 503, 504):
-
-                if attempt < 3:
-                    time.sleep(attempt * 30)
-                    continue
-
-            response.raise_for_status()
-
-            html = response.text
-            lowered = html.lower()
-
-            if any(term in lowered for term in (
-                "captcha",
-                "robot check",
-                "validatecaptcha",
-                "enter the characters you see below",
-            )):
-                raise RuntimeError(
-                    f"Amazon CAPTCHA detected on page {page}"
-                )
-
-            return html
-
-        except requests.RequestException:
-
-            logger.exception(
-                "Request failed on page %s, attempt %s",
-                page,
-                attempt
-            )
-
-            if attempt == 3:
-                raise
-
-            time.sleep(attempt * 30)
-
-    raise RuntimeError(
-        f"Could not download Amazon page {page}"
+    text = text.translate(
+        str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+    )
+    text = text.translate(
+        str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
     )
 
-
-def diagnose_page(html: str, page: int):
-
-    soup = BeautifulSoup(html, "html.parser")
-
-    selectors = [
-        '[data-component-type="s-search-result"]',
-        '.s-result-item[data-asin]',
-        '[data-asin]',
-        '[data-csa-c-item-id]',
-        'raw-html',
-    ]
-
-    logger.info("========== PAGE %s DIAGNOSTIC ==========", page)
-
-    for selector in selectors:
-
-        found = soup.select(selector)
-
-        logger.info(
-            "Page %s selector %s: %s matches",
-            page,
-            selector,
-            len(found)
-        )
-
-        if found and selector != "raw-html":
-
-            sample = found[0].prettify()[:6000]
-
-            logger.info(
-                "Page %s sample for %s:\n%s",
-                page,
-                selector,
-                sample
-            )
-
-    asin_nodes = soup.find_all(attrs={"data-asin": True})
-
-    for node in asin_nodes[:5]:
-
-        logger.info(
-            "Page %s ASIN sample: asin=%s | tag=%s | classes=%s",
-            page,
-            node.get("data-asin"),
-            node.name,
-            node.get("class")
-        )
-
-    logger.info("========== END DIAGNOSTIC ==========")
-
-
-def save_products(products: list[dict]) -> int:
-
-    now = datetime.now(timezone.utc).isoformat(
-        timespec="seconds"
+    match = re.search(
+        r"([\d,]+(?:\.\d{1,2})?)",
+        text.replace("٬", ",").replace("٫", ".")
     )
 
-    inserted = 0
-
-    with closing(connect()) as db:
-
-        for p in products:
-
-            existing = db.execute(
-                "SELECT asin FROM products WHERE asin=?",
-                (p["asin"],)
-            ).fetchone()
-
-            if existing:
-
-                db.execute("""
-                    UPDATE products
-                    SET title=?, price=?, image_url=?,
-                        product_url=?, last_seen=?
-                    WHERE asin=?
-                """, (
-                    p["title"],
-                    p["price"],
-                    p["image_url"],
-                    p["product_url"],
-                    now,
-                    p["asin"]
-                ))
-
-            else:
-
-                db.execute("""
-                    INSERT INTO products (
-                        asin, title, price, image_url,
-                        product_url, first_seen, last_seen
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    p["asin"],
-                    p["title"],
-                    p["price"],
-                    p["image_url"],
-                    p["product_url"],
-                    now,
-                    now
-                ))
-
-                inserted += 1
-
-        db.commit()
-
-    logger.info(
-        "Saved %s products. Newly inserted: %s",
-        len(products),
-        inserted
-    )
-
-    return inserted
-
-
-def save_progress(next_page: int, completed: bool):
-
-    now = datetime.now(timezone.utc).isoformat()
-
-    with closing(connect()) as db:
-
-        db.execute("""
-            UPDATE scan_state
-            SET next_page=?, completed=?, last_success=?
-            WHERE id=1
-        """, (
-            next_page,
-            int(completed),
-            now
-        ))
-
-        db.commit()
-
-
-def run_check() -> dict:
-
-    with closing(connect()) as db:
-
-        state = db.execute(
-            "SELECT * FROM scan_state WHERE id=1"
-        ).fetchone()
-
-    start_page = state["next_page"]
-
-    if state["completed"]:
-        start_page = 1
-
-    end_page = min(
-        start_page + MAX_PAGES_PER_RUN - 1,
-        MAX_PAGES
-    )
-
-    pages_scanned = 0
-    parsed_total = 0
-    new_total = 0
-
-    completed = False
-    next_page = start_page
-    now = None
-
-    logger.info(
-        "Scan started: pages %s to %s",
-        start_page,
-        end_page
-    )
-
-    for page in range(start_page, end_page + 1):
-
-        html = fetch_page(page)
-
-        logger.info(
-            "Page %s downloaded. HTML length=%s",
-            page,
-            len(html)
-        )
-
-        products = parse_resale_html(html)
-
-        logger.info(
-            "Page %s parsing result: %s products",
-            page,
-            len(products)
-        )
-
-        if not products:
-
-            diagnose_page(html, page)
-
-            raise RuntimeError(
-                f"No products parsed on page {page}. "
-                "Diagnostic samples were written to Render logs. "
-                "Progress saved; this page will be retried."
-            )
-
-        new_count = save_products(products)
-
-        new_total += new_count
-        parsed_total += len(products)
-        pages_scanned += 1
-
-        completed = page >= MAX_PAGES
-        next_page = 1 if completed else page + 1
-
-        save_progress(next_page, completed)
-
-        now = datetime.now(timezone.utc).isoformat()
-
-        logger.info(
-            "Page %s completed. New=%s. Next page=%s",
-            page,
-            new_count,
-            next_page
-        )
-
-        if page < end_page:
-            time.sleep(PAGE_DELAY)
-
-    result = {
-        "pages_scanned": pages_scanned,
-        "first_page": start_page,
-        "last_page": start_page + pages_scanned - 1,
-        "parsed": parsed_total,
-        "new": new_total,
-        "initial_scan_completed": completed,
-        "next_page": next_page,
-        "checked_at": now,
-    }
-
-    logger.info("Scan finished: %s", result)
-
-    return result
-
-
-@app.on_event("startup")
-def startup():
-
-    init_db()
-
-    logger.info("Application started. Database=%s", DB_PATH)
-
-    if os.getenv("RUN_SCHEDULER", "1") == "1":
-
-        scheduler.add_job(
-            run_check,
-            "interval",
-            seconds=INTERVAL_SECONDS,
-            id="resale-check",
-            max_instances=1,
-            coalesce=True
-        )
-
-        scheduler.start()
-
-        logger.info(
-            "Scheduler started. Interval=%s seconds",
-            INTERVAL_SECONDS
-        )
-
-
-@app.on_event("shutdown")
-def shutdown():
-
-    if scheduler.running:
-        scheduler.shutdown(wait=False)
-
-
-@app.get("/")
-def home():
-
-    return FileResponse(
-        ROOT / "templates" / "index.html"
-    )
-
-
-@app.get("/api/products")
-def products():
-
-    with closing(connect()) as db:
-
-        rows = db.execute("""
-            SELECT * FROM products
-            ORDER BY first_seen DESC, rowid DESC
-        """).fetchall()
-
-    return [dict(row) for row in rows]
-
-
-@app.get("/api/status")
-def status():
-
-    with closing(connect()) as db:
-
-        count = db.execute(
-            "SELECT COUNT(*) FROM products"
-        ).fetchone()[0]
-
-        state = db.execute(
-            "SELECT * FROM scan_state WHERE id=1"
-        ).fetchone()
-
-    return {
-        "saved_products": count,
-        "interval_seconds": INTERVAL_SECONDS,
-        "scheduler_running": scheduler.running,
-        "next_page": state["next_page"],
-        "initial_scan_completed": bool(state["completed"]),
-        "last_success": state["last_success"],
-    }
-
-
-@app.post("/api/check")
-def manual_check():
+    if not match:
+        return None
 
     try:
-        return run_check()
+        return float(match.group(1).replace(",", ""))
+    except ValueError:
+        return None
 
-    except Exception as exc:
 
-        logger.exception("Manual scan failed")
+def _get_asin(card) -> str:
+    asin = card.get("data-asin", "").strip()
 
-        raise HTTPException(
-            status_code=502,
-            detail=str(exc)
-        ) from exc
+    if re.fullmatch(r"[A-Z0-9]{10}", asin):
+        return asin
+
+    raw_id = card.get("data-csa-c-item-id", "")
+    match = re.search(r"([A-Z0-9]{10})$", raw_id)
+
+    if match:
+        return match.group(1)
+
+    for link in card.find_all("a", href=True):
+        match = re.search(
+            r"/(?:dp|gp/product)/([A-Z0-9]{10})",
+            link["href"]
+        )
+        if match:
+            return match.group(1)
+
+    return ""
+
+
+def _get_title(card) -> str:
+    node = card.select_one("h2")
+
+    if node:
+        title = _clean(node.get_text(" ", strip=True))
+        if title:
+            return title
+
+    node = card.select_one(
+        ".a-text-normal, [class*='product-title']"
+    )
+
+    if node:
+        return _clean(node.get_text(" ", strip=True))
+
+    return ""
+
+
+def _get_image(card):
+    img = card.find("img")
+
+    if not img:
+        return None
+
+    image = (
+        img.get("src")
+        or img.get("data-src")
+        or img.get("data-old-hires")
+    )
+
+    if image and image.startswith("//"):
+        image = "https:" + image
+
+    if image:
+        return image
+
+    dynamic = img.get("data-a-dynamic-image")
+
+    if dynamic:
+        try:
+            return next(iter(json.loads(dynamic)))
+        except (ValueError, TypeError, StopIteration):
+            pass
+
+    return None
+
+
+def _get_link(card, asin: str) -> str:
+    for a in card.find_all("a", href=True):
+        href = a["href"]
+
+        if (
+            f"/dp/{asin}" in href
+            or f"/gp/product/{asin}" in href
+        ):
+            return urljoin(
+                "https://www.amazon.eg",
+                href.split("?")[0]
+            )
+
+    return f"https://www.amazon.eg/dp/{asin}"
+
+
+def _get_price(card):
+    selectors = [
+        '[data-cy="secondary-offer-recipe"]',
+        ".a-price .a-offscreen",
+        ".a-price-whole",
+        "[data-a-color='price']",
+    ]
+
+    for selector in selectors:
+        node = card.select_one(selector)
+
+        if node:
+            price = _price(node.get_text(" ", strip=True))
+            if price is not None:
+                return price
+
+    return None
+
+
+def parse_resale_html(html: str) -> list[dict]:
+    outer = BeautifulSoup(html, "html.parser")
+
+    cards = {}
+
+    payloads = [
+        node.get("data-payload", "")
+        for node in outer.find_all("raw-html")
+        if node.get("data-payload")
+    ]
+
+    payloads.append(str(outer))
+
+    for payload in payloads:
+        inner = BeautifulSoup(
+            unescape(payload),
+            "html.parser"
+        )
+
+        product_cards = []
+
+        product_cards.extend(
+            inner.select(
+                '[data-component-type="s-search-result"]'
+            )
+        )
+
+        product_cards.extend(
+            inner.select(
+                ".s-result-item[data-asin]"
+            )
+        )
+
+        product_cards.extend(
+            inner.find_all(
+                attrs={"data-csa-c-item-id": True}
+            )
+        )
+
+        product_cards.extend(
+            inner.find_all(
+                attrs={"data-asin": True}
+            )
+        )
+
+        for card in product_cards:
+            asin = _get_asin(card)
+
+            if not asin or asin in cards:
+                continue
+
+            title = _get_title(card)
+
+            if not title:
+                continue
+
+            cards[asin] = {
+                "asin": asin,
+                "title": title,
+                "price": _get_price(card),
+                "image_url": _get_image(card),
+                "product_url": _get_link(card, asin),
+            }
+
+    return list(cards.values())
