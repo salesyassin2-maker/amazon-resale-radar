@@ -15,7 +15,7 @@ SEARCH_PARAMS = {
     "i": "warehouse-deals",
     "srs": "27972173031",
     "bbn": "27972173031",
-    "s": "popularity-rank",
+    "s": "relevanceblender",
     "fs": "true",
 }
 
@@ -31,7 +31,6 @@ def _price(text: str) -> float | None:
     text = text.translate(
         str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
     )
-
     text = text.translate(
         str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
     )
@@ -203,10 +202,7 @@ def parse_resale_html(html: str) -> list[dict]:
         for card in product_cards:
             asin = _get_asin(card)
 
-            if not asin:
-                continue
-
-            if asin in cards:
+            if not asin or asin in cards:
                 continue
 
             title = _get_title(card)
