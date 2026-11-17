@@ -8,14 +8,16 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
+
 BASE_URL = "https://www.amazon.eg/s"
+
 MAX_PAGES = 187
 
 SEARCH_PARAMS = {
     "i": "warehouse-deals",
     "srs": "27972173031",
     "bbn": "27972173031",
-    "s": "relevanceblender",
+    "s": "date-desc-rank",
     "fs": "true",
 }
 
@@ -31,6 +33,7 @@ def _price(text: str) -> float | None:
     text = text.translate(
         str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
     )
+
     text = text.translate(
         str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
     )
@@ -44,28 +47,37 @@ def _price(text: str) -> float | None:
         return None
 
     try:
-        return float(match.group(1).replace(",", ""))
+        return float(
+            match.group(1).replace(",", "")
+        )
     except ValueError:
         return None
 
 
 def _get_asin(card) -> str:
+
     asin = card.get("data-asin", "").strip()
 
     if re.fullmatch(r"[A-Z0-9]{10}", asin):
         return asin
 
     raw_id = card.get("data-csa-c-item-id", "")
-    match = re.search(r"([A-Z0-9]{10})$", raw_id)
+
+    match = re.search(
+        r"([A-Z0-9]{10})$",
+        raw_id
+    )
 
     if match:
         return match.group(1)
 
     for link in card.find_all("a", href=True):
+
         match = re.search(
             r"/(?:dp|gp/product)/([A-Z0-9]{10})",
             link["href"]
         )
+
         if match:
             return match.group(1)
 
@@ -73,10 +85,15 @@ def _get_asin(card) -> str:
 
 
 def _get_title(card) -> str:
+
     node = card.select_one("h2")
 
     if node:
-        title = _clean(node.get_text(" ", strip=True))
+
+        title = _clean(
+            node.get_text(" ", strip=True)
+        )
+
         if title:
             return title
 
@@ -85,12 +102,15 @@ def _get_title(card) -> str:
     )
 
     if node:
-        return _clean(node.get_text(" ", strip=True))
+        return _clean(
+            node.get_text(" ", strip=True)
+        )
 
     return ""
 
 
 def _get_image(card):
+
     img = card.find("img")
 
     if not img:
@@ -111,31 +131,45 @@ def _get_image(card):
     dynamic = img.get("data-a-dynamic-image")
 
     if dynamic:
+
         try:
-            return next(iter(json.loads(dynamic)))
-        except (ValueError, TypeError, StopIteration):
+            return next(
+                iter(json.loads(dynamic))
+            )
+
+        except (
+            ValueError,
+            TypeError,
+            StopIteration
+        ):
             pass
 
     return None
 
 
 def _get_link(card, asin: str) -> str:
+
     for a in card.find_all("a", href=True):
+
         href = a["href"]
 
         if (
             f"/dp/{asin}" in href
             or f"/gp/product/{asin}" in href
         ):
+
             return urljoin(
                 "https://www.amazon.eg",
                 href.split("?")[0]
             )
 
-    return f"https://www.amazon.eg/dp/{asin}"
+    return (
+        f"https://www.amazon.eg/dp/{asin}"
+    )
 
 
 def _get_price(card):
+
     selectors = [
         '[data-cy="secondary-offer-recipe"]',
         ".a-price .a-offscreen",
@@ -144,10 +178,15 @@ def _get_price(card):
     ]
 
     for selector in selectors:
+
         node = card.select_one(selector)
 
         if node:
-            price = _price(node.get_text(" ", strip=True))
+
+            price = _price(
+                node.get_text(" ", strip=True)
+            )
+
             if price is not None:
                 return price
 
@@ -155,7 +194,11 @@ def _get_price(card):
 
 
 def parse_resale_html(html: str) -> list[dict]:
-    outer = BeautifulSoup(html, "html.parser")
+
+    outer = BeautifulSoup(
+        html,
+        "html.parser"
+    )
 
     cards = {}
 
@@ -168,6 +211,7 @@ def parse_resale_html(html: str) -> list[dict]:
     payloads.append(str(outer))
 
     for payload in payloads:
+
         inner = BeautifulSoup(
             unescape(payload),
             "html.parser"
@@ -200,6 +244,7 @@ def parse_resale_html(html: str) -> list[dict]:
         )
 
         for card in product_cards:
+
             asin = _get_asin(card)
 
             if not asin or asin in cards:
@@ -215,7 +260,10 @@ def parse_resale_html(html: str) -> list[dict]:
                 "title": title,
                 "price": _get_price(card),
                 "image_url": _get_image(card),
-                "product_url": _get_link(card, asin),
+                "product_url": _get_link(
+                    card,
+                    asin
+                ),
             }
 
     return list(cards.values())
