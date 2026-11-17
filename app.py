@@ -37,9 +37,10 @@ DB_PATH = Path(
     os.getenv("DATABASE_PATH", ROOT / "resale.db")
 )
 
+# بدء دورة الفحص كل 30 ثانية
 INTERVAL_SECONDS = max(
-    1800,
-    int(os.getenv("CHECK_INTERVAL_SECONDS", "1800"))
+    30,
+    int(os.getenv("CHECK_INTERVAL_SECONDS", "30"))
 )
 
 REQUEST_TIMEOUT = int(
@@ -47,13 +48,19 @@ REQUEST_TIMEOUT = int(
 )
 
 PAGE_DELAY = max(
-    10,
-    int(os.getenv("PAGE_DELAY_SECONDS", "10"))
+    5,
+    int(os.getenv("PAGE_DELAY_SECONDS", "5"))
 )
 
 MAX_PAGES_PER_RUN = max(
-    1,
+    2,
     int(os.getenv("MAX_PAGES_PER_RUN", "10"))
+)
+
+RECENT_PAGES_PER_RUN = 3
+
+DEEP_PAGES_PER_RUN = (
+    MAX_PAGES_PER_RUN - RECENT_PAGES_PER_RUN
 )
 
 app = FastAPI(title="Amazon Resale Radar")
@@ -150,7 +157,9 @@ def fetch_page(page: int) -> str:
                 response.url
             )
 
-            if response.status_code in (429, 500, 502, 503, 504):
+            if response.status_code in (
+                429, 500, 502, 503, 504
+            ):
 
                 if attempt < 3:
                     time.sleep(attempt * 30)
@@ -230,7 +239,9 @@ def diagnose_page(html: str, page: int):
                 sample
             )
 
-    asin_nodes = soup.find_all(attrs={"data-asin": True})
+    asin_nodes = soup.find_all(
+        attrs={"data-asin": True}
+    )
 
     for node in asin_nodes[:5]:
 
@@ -330,6 +341,40 @@ def save_progress(next_page: int, completed: bool):
         db.commit()
 
 
+def scan_one_page(page: int) -> tuple[int, int]:
+
+    html = fetch_page(page)
+
+    logger.info(
+        "Page %s downloaded. HTML length=%s",
+        page,
+        len(html)
+    )
+
+    products = parse_resale_html(html)
+
+    logger.info(
+        "Page %s parsing result: %s products",
+        page,
+        len(products)
+    )
+
+    if not products:
+
+        logger.warning(
+            "Page %s has no products. Skipping.",
+            page
+        )
+
+        diagnose_page(html, page)
+
+        return 0, 0
+
+    new_count = save_products(products)
+
+    return len(products), new_count
+
+
 def run_check() -> dict:
 
     with closing(connect()) as db:
@@ -338,96 +383,108 @@ def run_check() -> dict:
             "SELECT * FROM scan_state WHERE id=1"
         ).fetchone()
 
-    start_page = state["next_page"]
+    recent_start = 1
 
-    if state["completed"]:
-        start_page = 1
-
-    end_page = min(
-        start_page + MAX_PAGES_PER_RUN - 1,
+    recent_end = min(
+        RECENT_PAGES_PER_RUN,
         MAX_PAGES
     )
+
+    deep_start = state["next_page"]
+
+    if state["completed"] or deep_start <= RECENT_PAGES_PER_RUN:
+        deep_start = RECENT_PAGES_PER_RUN + 1
 
     pages_scanned = 0
     empty_pages = 0
     parsed_total = 0
     new_total = 0
 
-    completed = False
-    next_page = start_page
-    now = None
-
     logger.info(
-        "Scan started: pages %s to %s",
-        start_page,
-        end_page
+        "Recent scan started: pages %s to %s",
+        recent_start,
+        recent_end
     )
 
-    for page in range(start_page, end_page + 1):
+    # فحص أحدث المنتجات في كل دورة
+    for page in range(recent_start, recent_end + 1):
 
-        html = fetch_page(page)
+        parsed, new_count = scan_one_page(page)
 
         pages_scanned += 1
+        parsed_total += parsed
+        new_total += new_count
 
-        logger.info(
-            "Page %s downloaded. HTML length=%s",
-            page,
-            len(html)
-        )
-
-        products = parse_resale_html(html)
-
-        logger.info(
-            "Page %s parsing result: %s products",
-            page,
-            len(products)
-        )
-
-        # الصفحة الفارغة يتم تجاوزها دون إيقاف الفحص
-        if not products:
-
+        if parsed == 0:
             empty_pages += 1
 
-            logger.warning(
-                "Page %s has no products. Skipping to next page.",
-                page
+        if page < recent_end:
+            time.sleep(PAGE_DELAY)
+
+    # استكمال بقية صفحات المخزون
+    deep_end = min(
+        deep_start + DEEP_PAGES_PER_RUN - 1,
+        MAX_PAGES
+    )
+
+    logger.info(
+        "Deep scan started: pages %s to %s",
+        deep_start,
+        deep_end
+    )
+
+    next_page = deep_start
+    completed = False
+
+    if deep_start <= MAX_PAGES:
+
+        for page in range(deep_start, deep_end + 1):
+
+            parsed, new_count = scan_one_page(page)
+
+            pages_scanned += 1
+            parsed_total += parsed
+            new_total += new_count
+
+            if parsed == 0:
+                empty_pages += 1
+
+            completed = page >= MAX_PAGES
+
+            next_page = (
+                RECENT_PAGES_PER_RUN + 1
+                if completed
+                else page + 1
             )
 
-            diagnose_page(html, page)
+            save_progress(next_page, completed)
 
-        else:
+            logger.info(
+                "Deep page %s completed. Parsed=%s | "
+                "New=%s | Next page=%s",
+                page,
+                parsed,
+                new_count,
+                next_page
+            )
 
-            new_count = save_products(products)
+            if page < deep_end:
+                time.sleep(PAGE_DELAY)
 
-            new_total += new_count
-            parsed_total += len(products)
+    else:
 
-        # حفظ التقدم بعد كل صفحة، سواء كانت فارغة أم لا
-        completed = page >= MAX_PAGES
-
-        next_page = 1 if completed else page + 1
+        next_page = RECENT_PAGES_PER_RUN + 1
+        completed = True
 
         save_progress(next_page, completed)
 
-        now = datetime.now(timezone.utc).isoformat()
-
-        logger.info(
-            "Page %s completed. Products=%s | New=%s | "
-            "Empty pages=%s | Next page=%s",
-            page,
-            len(products),
-            new_total,
-            empty_pages,
-            next_page
-        )
-
-        if page < end_page:
-            time.sleep(PAGE_DELAY)
+    now = datetime.now(timezone.utc).isoformat()
 
     result = {
         "pages_scanned": pages_scanned,
-        "first_page": start_page,
-        "last_page": start_page + pages_scanned - 1,
+        "recent_pages": recent_end - recent_start + 1,
+        "deep_first_page": deep_start,
+        "deep_last_page": deep_end,
         "parsed": parsed_total,
         "new": new_total,
         "empty_pages": empty_pages,
