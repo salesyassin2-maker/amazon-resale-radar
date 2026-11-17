@@ -203,7 +203,10 @@ def diagnose_page(html: str, page: int):
         'raw-html',
     ]
 
-    logger.info("========== PAGE %s DIAGNOSTIC ==========", page)
+    logger.info(
+        "========== PAGE %s DIAGNOSTIC ==========",
+        page
+    )
 
     for selector in selectors:
 
@@ -239,7 +242,9 @@ def diagnose_page(html: str, page: int):
             node.get("class")
         )
 
-    logger.info("========== END DIAGNOSTIC ==========")
+    logger.info(
+        "========== END DIAGNOSTIC =========="
+    )
 
 
 def save_products(products: list[dict]) -> int:
@@ -344,6 +349,7 @@ def run_check() -> dict:
     )
 
     pages_scanned = 0
+    empty_pages = 0
     parsed_total = 0
     new_total = 0
 
@@ -361,6 +367,8 @@ def run_check() -> dict:
 
         html = fetch_page(page)
 
+        pages_scanned += 1
+
         logger.info(
             "Page %s downloaded. HTML length=%s",
             page,
@@ -375,23 +383,28 @@ def run_check() -> dict:
             len(products)
         )
 
+        # الصفحة الفارغة يتم تجاوزها دون إيقاف الفحص
         if not products:
+
+            empty_pages += 1
+
+            logger.warning(
+                "Page %s has no products. Skipping to next page.",
+                page
+            )
 
             diagnose_page(html, page)
 
-            raise RuntimeError(
-                f"No products parsed on page {page}. "
-                "Diagnostic samples were written to Render logs. "
-                "Progress saved; this page will be retried."
-            )
+        else:
 
-        new_count = save_products(products)
+            new_count = save_products(products)
 
-        new_total += new_count
-        parsed_total += len(products)
-        pages_scanned += 1
+            new_total += new_count
+            parsed_total += len(products)
 
+        # حفظ التقدم بعد كل صفحة، سواء كانت فارغة أم لا
         completed = page >= MAX_PAGES
+
         next_page = 1 if completed else page + 1
 
         save_progress(next_page, completed)
@@ -399,9 +412,12 @@ def run_check() -> dict:
         now = datetime.now(timezone.utc).isoformat()
 
         logger.info(
-            "Page %s completed. New=%s. Next page=%s",
+            "Page %s completed. Products=%s | New=%s | "
+            "Empty pages=%s | Next page=%s",
             page,
-            new_count,
+            len(products),
+            new_total,
+            empty_pages,
             next_page
         )
 
@@ -414,6 +430,7 @@ def run_check() -> dict:
         "last_page": start_page + pages_scanned - 1,
         "parsed": parsed_total,
         "new": new_total,
+        "empty_pages": empty_pages,
         "initial_scan_completed": completed,
         "next_page": next_page,
         "checked_at": now,
@@ -429,7 +446,10 @@ def startup():
 
     init_db()
 
-    logger.info("Application started. Database=%s", DB_PATH)
+    logger.info(
+        "Application started. Database=%s",
+        DB_PATH
+    )
 
     if os.getenv("RUN_SCHEDULER", "1") == "1":
 
