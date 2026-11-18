@@ -9,20 +9,20 @@ import logging
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
 
 import requests
-
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from scraper import (
+    CATEGORIES,
     build_start_url,
     extract_next_page_url,
     parse_resale_html,
 )
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,13 +47,13 @@ REQUEST_TIMEOUT = int(
 )
 
 PAGE_DELAY = max(
-    5,
+    0,
     int(os.getenv("PAGE_DELAY_SECONDS", "5"))
 )
 
-MAX_BATCHES_PER_RUN = max(
+MAX_PAGES_PER_RUN = max(
     1,
-    int(os.getenv("MAX_PAGES_PER_RUN", "10"))
+    int(os.getenv("MAX_PAGES_PER_RUN", "1"))
 )
 
 app = FastAPI(title="Amazon Resale Radar")
@@ -106,46 +106,32 @@ def init_db():
         """)
 
         db.execute("""
-            CREATE TABLE IF NOT EXISTS scan_state (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                next_page INTEGER NOT NULL DEFAULT 1,
-                completed INTEGER NOT NULL DEFAULT 0,
-                last_success TEXT
+            CREATE TABLE IF NOT EXISTS product_categories (
+                asin TEXT NOT NULL,
+                category_key TEXT NOT NULL,
+                PRIMARY KEY (asin, category_key),
+                FOREIGN KEY (asin) REFERENCES products(asin)
             )
         """)
 
-        columns = {
-            row["name"]
-            for row in db.execute(
-                "PRAGMA table_info(scan_state)"
-            ).fetchall()
-        }
-
-        if "next_url" not in columns:
-            db.execute("""
-                ALTER TABLE scan_state
-                ADD COLUMN next_url TEXT
-            """)
-
         db.execute("""
-            INSERT OR IGNORE INTO scan_state
-            (id, next_page, completed)
-            VALUES (1, 1, 0)
+            CREATE TABLE IF NOT EXISTS category_scan_state (
+                category_key TEXT PRIMARY KEY,
+                next_url TEXT,
+                completed INTEGER NOT NULL DEFAULT 0,
+                last_success TEXT,
+                last_error TEXT
+            )
         """)
 
+        for key in CATEGORIES:
+            db.execute("""
+                INSERT OR IGNORE INTO category_scan_state
+                (category_key)
+                VALUES (?)
+            """, (key,))
+
         db.commit()
-
-
-def page_number_from_url(url: str | None) -> int:
-
-    if not url:
-        return 1
-
-    try:
-        values = parse_qs(urlparse(url).query)
-        return int(values.get("page", ["1"])[0])
-    except (ValueError, TypeError):
-        return 1
 
 
 def fetch_url(url: str) -> tuple[str, str]:
@@ -162,12 +148,10 @@ def fetch_url(url: str) -> tuple[str, str]:
             )
 
             logger.info(
-                "Amazon response: HTTP %s | attempt=%s | "
-                "bytes=%s | final_url=%s",
+                "Amazon response HTTP %s | attempt=%s | bytes=%s",
                 response.status_code,
                 attempt,
-                len(response.content),
-                response.url
+                len(response.content)
             )
 
             if response.status_code in (
@@ -175,7 +159,7 @@ def fetch_url(url: str) -> tuple[str, str]:
             ):
 
                 if attempt < 3:
-                    time.sleep(attempt * 30)
+                    time.sleep(attempt * 20)
                     continue
 
             response.raise_for_status()
@@ -187,10 +171,10 @@ def fetch_url(url: str) -> tuple[str, str]:
                 "captcha",
                 "robot check",
                 "validatecaptcha",
-                "enter the characters you see below",
+                "enter the characters you see below"
             )):
                 raise RuntimeError(
-                    "Amazon CAPTCHA detected"
+                    "Amazon CAPTCHA detected; scan paused"
                 )
 
             return html, response.url
@@ -198,19 +182,22 @@ def fetch_url(url: str) -> tuple[str, str]:
         except requests.RequestException:
 
             logger.exception(
-                "Request failed, attempt %s",
+                "Amazon request failed, attempt %s",
                 attempt
             )
 
             if attempt == 3:
                 raise
 
-            time.sleep(attempt * 30)
+            time.sleep(attempt * 20)
 
     raise RuntimeError("Could not download Amazon page")
 
 
-def save_products(products: list[dict]) -> int:
+def save_products(
+    products: list[dict],
+    category_key: str
+) -> int:
 
     now = datetime.now(timezone.utc).isoformat(
         timespec="seconds"
@@ -222,12 +209,12 @@ def save_products(products: list[dict]) -> int:
 
         for product in products:
 
-            existing = db.execute(
+            exists = db.execute(
                 "SELECT asin FROM products WHERE asin=?",
                 (product["asin"],)
             ).fetchone()
 
-            if existing:
+            if exists:
 
                 db.execute("""
                     UPDATE products
@@ -263,10 +250,20 @@ def save_products(products: list[dict]) -> int:
 
                 inserted += 1
 
+            db.execute("""
+                INSERT OR IGNORE INTO product_categories
+                (asin, category_key)
+                VALUES (?, ?)
+            """, (
+                product["asin"],
+                category_key
+            ))
+
         db.commit()
 
     logger.info(
-        "Saved products=%s | newly inserted=%s",
+        "Category=%s | products=%s | new=%s",
+        category_key,
         len(products),
         inserted
     )
@@ -274,215 +271,150 @@ def save_products(products: list[dict]) -> int:
     return inserted
 
 
-def save_progress(
-    next_url: str | None,
-    completed: bool
-):
+def scan_category(
+    category_key: str,
+    max_pages: int = MAX_PAGES_PER_RUN
+) -> dict:
 
-    now = datetime.now(timezone.utc).isoformat()
-
-    next_page = page_number_from_url(next_url)
+    if category_key not in CATEGORIES:
+        raise ValueError("Unknown category")
 
     with closing(connect()) as db:
 
-        db.execute("""
-            UPDATE scan_state
-            SET next_url=?,
-                next_page=?,
-                completed=?,
-                last_success=?
-            WHERE id=1
-        """, (
-            next_url,
-            next_page,
-            int(completed),
-            now
-        ))
+        state = db.execute("""
+            SELECT *
+            FROM category_scan_state
+            WHERE category_key=?
+        """, (category_key,)).fetchone()
 
-        db.commit()
-
-
-def scan_page(url: str) -> dict:
-
-    html, final_url = fetch_url(url)
-
-    products = parse_resale_html(html)
-
-    next_url = extract_next_page_url(
-        html,
-        final_url
+    url = (
+        state["next_url"]
+        or build_start_url(category_key)
     )
 
-    new_count = 0
+    pages = 0
+    parsed = 0
+    new = 0
+    completed = False
+    last_error = None
 
-    if products:
-        new_count = save_products(products)
+    for index in range(max_pages):
 
-    logger.info(
-        "Page scan result: products=%s | new=%s | "
-        "has_next=%s | url=%s",
-        len(products),
-        new_count,
-        bool(next_url),
-        final_url
-    )
+        try:
 
-    if not products and not next_url:
-        logger.warning(
-            "No products and no next-page link. "
-            "Amazon may have returned an empty or unexpected page."
-        )
+            html, final_url = fetch_url(url)
+
+            products = parse_resale_html(html)
+
+            next_url = extract_next_page_url(
+                html,
+                final_url
+            )
+
+            new += save_products(
+                products,
+                category_key
+            )
+
+            pages += 1
+            parsed += len(products)
+
+            now = datetime.now(
+                timezone.utc
+            ).isoformat(timespec="seconds")
+
+            if next_url:
+                url = next_url
+            else:
+                completed = True
+                url = None
+
+            with closing(connect()) as db:
+
+                db.execute("""
+                    UPDATE category_scan_state
+                    SET next_url=?,
+                        completed=?,
+                        last_success=?,
+                        last_error=NULL
+                    WHERE category_key=?
+                """, (
+                    url,
+                    int(completed),
+                    now,
+                    category_key
+                ))
+
+                db.commit()
+
+            if completed or index + 1 >= max_pages:
+                break
+
+            if PAGE_DELAY:
+                time.sleep(PAGE_DELAY)
+
+        except Exception as exc:
+
+            last_error = str(exc)
+
+            logger.exception(
+                "Category scan failed: %s",
+                category_key
+            )
+
+            with closing(connect()) as db:
+
+                db.execute("""
+                    UPDATE category_scan_state
+                    SET last_error=?
+                    WHERE category_key=?
+                """, (
+                    last_error[:1000],
+                    category_key
+                ))
+
+                db.commit()
+
+            break
 
     return {
-        "url": final_url,
-        "products": len(products),
-        "new": new_count,
-        "next_url": next_url,
+        "category": category_key,
+        "name": CATEGORIES[category_key]["name"],
+        "pages_scanned": pages,
+        "parsed": parsed,
+        "new": new,
+        "completed": completed,
+        "next_url": url,
+        "error": last_error
     }
 
 
 def run_check() -> dict:
 
-    with closing(connect()) as db:
+    results = []
 
-        state = db.execute(
-            "SELECT * FROM scan_state WHERE id=1"
-        ).fetchone()
+    for key in CATEGORIES:
+        results.append(scan_category(key))
 
-    start_url = build_start_url()
-
-    pages_scanned = 0
-    parsed_total = 0
-    new_total = 0
-    completed = False
-
-    logger.info("Starting fresh first-page check")
-
-    # فحص الصفحة الأولى في كل دورة لاكتشاف الإضافات الجديدة
-    first_result = scan_page(start_url)
-
-    pages_scanned += 1
-    parsed_total += first_result["products"]
-    new_total += first_result["new"]
-
-    first_next_url = first_result["next_url"]
-
-    # استكمال الفحص العميق من آخر رابط محفوظ
-    deep_url = state["next_url"] or first_next_url
-
-    # إذا لم يوجد رابط تالٍ، فلا توجد صفحات يمكن استكمالها
-    if not deep_url:
-
-        save_progress(None, True)
-
-        return {
-            "pages_scanned": pages_scanned,
-            "parsed": parsed_total,
-            "new": new_total,
-            "completed": True,
-            "next_page": 1,
-            "message": "No next-page link was found.",
-            "checked_at": datetime.now(
-                timezone.utc
-            ).isoformat(),
-        }
-
-    visited = {start_url}
-    last_next_url = deep_url
-
-    for batch_number in range(1, MAX_BATCHES_PER_RUN + 1):
-
-        if not deep_url:
-            completed = True
-            break
-
-        if deep_url in visited:
-
-            logger.warning(
-                "Repeated page URL detected. "
-                "Restarting catalog cycle."
-            )
-
-            deep_url = first_next_url
-            completed = True
-            break
-
-        visited.add(deep_url)
-
-        logger.info(
-            "Deep scan batch %s/%s",
-            batch_number,
-            MAX_BATCHES_PER_RUN
+    summary = {
+        "categories": results,
+        "pages_scanned": sum(
+            item["pages_scanned"] for item in results
+        ),
+        "parsed": sum(
+            item["parsed"] for item in results
+        ),
+        "new": sum(
+            item["new"] for item in results
         )
-
-        result = scan_page(deep_url)
-
-        pages_scanned += 1
-        parsed_total += result["products"]
-        new_total += result["new"]
-
-        next_url = result["next_url"]
-
-        if not next_url:
-
-            logger.info(
-                "No further page link found. "
-                "Catalog traversal reached its end."
-            )
-
-            completed = True
-            deep_url = first_next_url
-            break
-
-        if next_url in visited:
-
-            logger.warning(
-                "Amazon returned a repeated next-page link."
-            )
-
-            completed = True
-            deep_url = first_next_url
-            break
-
-        deep_url = next_url
-        last_next_url = deep_url
-
-        save_progress(
-            deep_url,
-            False
-        )
-
-        if batch_number < MAX_BATCHES_PER_RUN:
-            time.sleep(PAGE_DELAY)
-
-    if completed:
-
-        save_progress(
-            deep_url,
-            True
-        )
-
-    else:
-
-        save_progress(
-            deep_url or last_next_url,
-            False
-        )
-
-    result = {
-        "pages_scanned": pages_scanned,
-        "parsed": parsed_total,
-        "new": new_total,
-        "completed": completed,
-        "next_page": page_number_from_url(deep_url),
-        "checked_at": datetime.now(
-            timezone.utc
-        ).isoformat(),
     }
 
-    logger.info("Scan finished: %s", result)
+    logger.info(
+        "Scan cycle finished: %s",
+        summary
+    )
 
-    return result
+    return summary
 
 
 @app.on_event("startup")
@@ -495,7 +427,7 @@ def startup():
         DB_PATH
     )
 
-    if os.getenv("RUN_SCHEDULER", "1") == "1":
+    if os.getenv("RUN_SCHEDULER", "0") == "1":
 
         scheduler.add_job(
             run_check,
@@ -509,7 +441,7 @@ def startup():
         scheduler.start()
 
         logger.info(
-            "Scheduler started. Interval=%s seconds",
+            "Scheduler started: %s seconds",
             INTERVAL_SECONDS
         )
 
@@ -529,17 +461,94 @@ def home():
     )
 
 
-@app.get("/api/products")
-def products():
+@app.get("/api/categories")
+def categories():
 
     with closing(connect()) as db:
 
-        rows = db.execute("""
-            SELECT * FROM products
-            ORDER BY first_seen DESC, rowid DESC
-        """).fetchall()
+        states = {
+            row["category_key"]: dict(row)
+            for row in db.execute(
+                "SELECT * FROM category_scan_state"
+            ).fetchall()
+        }
 
-    return [dict(row) for row in rows]
+        counts = {
+            row["category_key"]: row["total"]
+            for row in db.execute("""
+                SELECT category_key, COUNT(*) AS total
+                FROM product_categories
+                GROUP BY category_key
+            """).fetchall()
+        }
+
+    return [
+        {
+            "key": key,
+            "name": value["name"],
+            "count": counts.get(key, 0),
+            "completed": bool(
+                states.get(key, {}).get("completed", 0)
+            ),
+            "last_success": states.get(key, {}).get(
+                "last_success"
+            ),
+            "last_error": states.get(key, {}).get(
+                "last_error"
+            )
+        }
+        for key, value in CATEGORIES.items()
+    ]
+
+
+@app.get("/api/products")
+def products(category: str | None = None):
+
+    with closing(connect()) as db:
+
+        if category and category not in CATEGORIES:
+            raise HTTPException(
+                status_code=400,
+                detail="Unknown category"
+            )
+
+        if category:
+
+            rows = db.execute("""
+                SELECT p.*
+                FROM products p
+                JOIN product_categories pc
+                    ON pc.asin=p.asin
+                WHERE pc.category_key=?
+                ORDER BY p.first_seen DESC, p.rowid DESC
+            """, (category,)).fetchall()
+
+        else:
+
+            rows = db.execute("""
+                SELECT *
+                FROM products
+                ORDER BY first_seen DESC, rowid DESC
+            """).fetchall()
+
+        result = []
+
+        for row in rows:
+
+            item = dict(row)
+
+            item["categories"] = [
+                r["category_key"]
+                for r in db.execute("""
+                    SELECT category_key
+                    FROM product_categories
+                    WHERE asin=?
+                """, (item["asin"],)).fetchall()
+            ]
+
+            result.append(item)
+
+    return result
 
 
 @app.get("/api/status")
@@ -551,19 +560,18 @@ def status():
             "SELECT COUNT(*) FROM products"
         ).fetchone()[0]
 
-        state = db.execute(
-            "SELECT * FROM scan_state WHERE id=1"
-        ).fetchone()
+        states = [
+            dict(row)
+            for row in db.execute(
+                "SELECT * FROM category_scan_state"
+            ).fetchall()
+        ]
 
     return {
         "saved_products": count,
         "interval_seconds": INTERVAL_SECONDS,
         "scheduler_running": scheduler.running,
-        "next_page": state["next_page"],
-        "initial_scan_completed": bool(
-            state["completed"]
-        ),
-        "last_success": state["last_success"],
+        "categories": states
     }
 
 
