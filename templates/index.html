@@ -1,22 +1,468 @@
+
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Amazon Resale Radar</title>
+
 <style>
-:root{font-family:Tahoma,Arial,sans-serif;color:#17202b;background:#f5f6f8}*{box-sizing:border-box}body{margin:0}header{background:#fff;border-bottom:1px solid #e5e8ed;padding:18px max(18px,calc((100% - 1180px)/2));display:flex;justify-content:space-between;align-items:center}.brand{font-size:22px;font-weight:800}.brand span{color:#e58b20}.state{font-size:12px;background:#eef7f0;color:#267244;border-radius:30px;padding:7px 12px}main{max-width:1180px;margin:28px auto;padding:0 18px}.head{display:flex;justify-content:space-between;align-items:end;gap:14px;margin-bottom:20px}h1{font-size:26px;margin:0 0 7px}.muted{color:#707987;font-size:13px}.tools{display:flex;gap:9px;flex-wrap:wrap;margin:18px 0}input{font:inherit;padding:11px 13px;border:1px solid #d9dee7;border-radius:10px;min-width:240px}button{font:inherit;border:0;border-radius:10px;background:#17202b;color:white;padding:11px 16px;cursor:pointer}.stats{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}.stat{background:white;border:1px solid #e6e9ee;border-radius:11px;padding:11px 14px;font-size:13px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px}.card{background:white;border:1px solid #e6e9ee;border-radius:13px;overflow:hidden;display:flex;flex-direction:column}.photo{height:175px;background:#fafbfc;display:flex;align-items:center;justify-content:center;padding:12px}.photo img{width:100%;height:100%;object-fit:contain}.info{padding:13px;display:flex;flex-direction:column;gap:9px;flex:1}.name{font-weight:700;line-height:1.6;min-height:44px}.price{font-size:19px;font-weight:800}.time{font-size:12px;color:#77808d}.buy{text-align:center;text-decoration:none;background:#fff1df;color:#8b4d09;border-radius:9px;padding:10px;font-size:13px;font-weight:700}.empty{grid-column:1/-1;text-align:center;background:#fff;padding:35px;border:1px dashed #ccd2dc;border-radius:13px;color:#727b88}.foot{font-size:12px;color:#7d8793;line-height:1.8;margin-top:22px}@media(max-width:900px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:650px){.head{align-items:start;flex-direction:column}h1{font-size:22px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.photo{height:145px}}@media(max-width:390px){.grid{grid-template-columns:1fr}}
-</style></head>
-<body><header><div class="brand">أقل <span>سعر</span></div><div class="state" id="state">جاري الاتصال...</div></header>
-<main><div class="head"><div><h1>وصل حديثاً — Amazon Resale</h1><div class="muted">المنتجات مرتبة حسب أول وقت اكتشاف، الأحدث أولاً</div></div><div class="muted">Amazon.eg · قسم المنتجات المستعملة</div></div>
-<div class="tools"><input id="search" type="search" placeholder="ابحث باسم المنتج أو ASIN"><button id="refresh">تحديث الآن</button></div>
-<div class="stats"><div class="stat">إجمالي المنتجات المكتشفة: <b id="count">—</b></div><div class="stat">الفحص الدوري المستهدف: <b>30 ثانية</b></div><div class="stat">آخر تحديث: <b id="last">—</b></div></div>
-<section class="grid" id="products"><div class="empty">لم يتم تحميل المنتجات بعد.</div></section>
-<div class="foot">المنتجات الجديدة تُضاف أعلى القائمة. تحديث السعر لا يغيّر ترتيب الاكتشاف. قد يتوقف الجلب مؤقتاً إذا غيّرت أمازون طريقة عرض الصفحة أو طلبت تحققاً إضافياً.</div></main>
+:root{
+  font-family:Tahoma,Arial,sans-serif;
+  color:#17202b;
+  background:#f5f6f8;
+}
+*{box-sizing:border-box}
+body{margin:0}
+header{
+  background:#fff;
+  border-bottom:1px solid #e5e8ed;
+  padding:17px 24px;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+}
+.brand{font-size:22px;font-weight:800}
+.brand span{color:#e58b20}
+.state{
+  font-size:12px;
+  background:#eef7f0;
+  color:#267244;
+  border-radius:30px;
+  padding:7px 12px;
+}
+main{max-width:1250px;margin:25px auto;padding:0 18px}
+.head{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:14px;
+  margin-bottom:20px;
+}
+h1{font-size:25px;margin:0 0 7px}
+.muted{color:#707987;font-size:13px}
+.tools{
+  display:flex;
+  gap:9px;
+  flex-wrap:wrap;
+  margin:18px 0;
+}
+input{
+  font:inherit;
+  padding:11px 13px;
+  border:1px solid #d9dee7;
+  border-radius:10px;
+  min-width:240px;
+}
+button{
+  font:inherit;
+  border:0;
+  border-radius:10px;
+  background:#17202b;
+  color:white;
+  padding:11px 16px;
+  cursor:pointer;
+}
+button:disabled{opacity:.55;cursor:wait}
+.stats{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  margin:16px 0;
+}
+.stat{
+  background:white;
+  border:1px solid #e6e9ee;
+  border-radius:11px;
+  padding:11px 14px;
+  font-size:13px;
+}
+.layout{
+  display:grid;
+  grid-template-columns:220px minmax(0,1fr);
+  gap:18px;
+  align-items:start;
+}
+.sidebar{
+  background:white;
+  border:1px solid #e6e9ee;
+  border-radius:13px;
+  padding:12px;
+  position:sticky;
+  top:15px;
+}
+.side-title{
+  font-size:15px;
+  font-weight:800;
+  padding:8px 9px 13px;
+}
+.category{
+  width:100%;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  background:transparent;
+  color:#394352;
+  text-align:right;
+  padding:12px 10px;
+  margin-bottom:4px;
+  border-radius:9px;
+  font-size:13px;
+}
+.category:hover{background:#f5f6f8}
+.category.active{
+  background:#fff1df;
+  color:#8b4d09;
+  font-weight:800;
+}
+.category small{
+  color:#87909c;
+  font-size:11px;
+}
+.content{min-width:0}
+.grid{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:15px;
+}
+.card{
+  background:white;
+  border:1px solid #e6e9ee;
+  border-radius:13px;
+  overflow:hidden;
+  display:flex;
+  flex-direction:column;
+}
+.photo{
+  height:175px;
+  background:#fafbfc;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:12px;
+}
+.photo img{
+  width:100%;
+  height:100%;
+  object-fit:contain;
+}
+.info{
+  padding:13px;
+  display:flex;
+  flex-direction:column;
+  gap:9px;
+  flex:1;
+}
+.name{
+  font-weight:700;
+  line-height:1.6;
+  min-height:44px;
+}
+.price{font-size:19px;font-weight:800}
+.time{font-size:12px;color:#77808d}
+.buy{
+  text-align:center;
+  text-decoration:none;
+  background:#fff1df;
+  color:#8b4d09;
+  border-radius:9px;
+  padding:10px;
+  font-size:13px;
+  font-weight:700;
+}
+.empty{
+  grid-column:1/-1;
+  text-align:center;
+  background:#fff;
+  padding:35px;
+  border:1px dashed #ccd2dc;
+  border-radius:13px;
+  color:#727b88;
+}
+.foot{
+  font-size:12px;
+  color:#7d8793;
+  line-height:1.8;
+  margin-top:22px;
+}
+@media(max-width:900px){
+  .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:650px){
+  .layout{grid-template-columns:1fr}
+  .sidebar{position:static}
+  .category-list{
+    display:flex;
+    flex-wrap:wrap;
+    gap:5px;
+  }
+  .category{
+    width:auto;
+    margin:0;
+    gap:8px;
+  }
+  .head{align-items:start;flex-direction:column}
+  h1{font-size:22px}
+}
+@media(max-width:390px){
+  .grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  <div class="brand">أقل <span>سعر</span></div>
+  <div class="state" id="state">جاري الاتصال...</div>
+</header>
+
+<main>
+
+  <div class="head">
+    <div>
+      <h1 id="pageTitle">كل المنتجات — Amazon Resale</h1>
+      <div class="muted">اكتشاف المنتجات ومتابعة الإضافات الجديدة</div>
+    </div>
+    <div class="muted">Amazon.eg · Resale</div>
+  </div>
+
+  <div class="tools">
+    <input id="search" type="search"
+      placeholder="ابحث باسم المنتج أو ASIN">
+    <button id="refresh">تحديث الآن</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      إجمالي المنتجات: <b id="count">—</b>
+    </div>
+    <div class="stat">
+      آخر تحديث: <b id="last">—</b>
+    </div>
+  </div>
+
+  <div class="layout">
+
+    <aside class="sidebar">
+      <div class="side-title">تصفح الأقسام</div>
+      <div class="category-list" id="categories">
+        <button class="category active" data-category="">
+          <span>كل المنتجات</span>
+          <small id="allCount">—</small>
+        </button>
+      </div>
+    </aside>
+
+    <section class="content">
+      <div class="grid" id="products">
+        <div class="empty">جاري تحميل المنتجات...</div>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="foot">
+    يتم جمع المنتجات من الأقسام المحددة.
+    قد يتوقف الجلب مؤقتاً إذا غيّرت أمازون طريقة عرض الصفحات
+    أو طلبت تحققاً إضافياً.
+  </div>
+
+</main>
+
 <script>
-const grid=document.querySelector('#products'), search=document.querySelector('#search');let all=[];
-function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function render(){const q=search.value.trim().toLowerCase();const rows=all.filter(p=>(p.title+' '+p.asin).toLowerCase().includes(q));document.querySelector('#count').textContent=all.length;grid.innerHTML=rows.length?rows.map(p=>`<article class="card"><div class="photo">${p.image_url?`<img loading="lazy" src="${esc(p.image_url)}" alt="">`:'لا توجد صورة'}</div><div class="info"><div class="name">${esc(p.title)}</div><div class="price">${p.price==null?'السعر غير متاح':Number(p.price).toLocaleString('ar-EG',{maximumFractionDigits:2})+' جنيه'}</div><div class="time">اكتُشف: ${new Date(p.first_seen).toLocaleString('ar-EG')}</div><a class="buy" href="${esc(p.product_url)}" target="_blank" rel="noopener">افتح المنتج على أمازون</a></div></article>`).join(''):'<div class="empty">لا توجد نتائج مطابقة.</div>'}
-async function load(){try{const r=await fetch('/api/products');if(!r.ok)throw Error('API');all=await r.json();render();document.querySelector('#state').textContent='متصل باللوحة';document.querySelector('#last').textContent=new Date().toLocaleTimeString('ar-EG')}catch(e){document.querySelector('#state').textContent='تعذر الاتصال بالخادم'}}
-search.addEventListener('input',render);document.querySelector('#refresh').addEventListener('click',async()=>{const b=document.querySelector('#refresh');b.disabled=true;b.textContent='جاري الفحص...';try{const r=await fetch('/api/check',{method:'POST'});const data=await r.json();if(!r.ok)throw Error(data.detail||'فشل الفحص');await load();alert(`تم فحص ${data.parsed} منتجاً، الجديد: ${data.new}`)}catch(e){alert('تعذر الفحص: '+e.message)}finally{b.disabled=false;b.textContent='تحديث الآن'}});
-load();setInterval(load,30000);
-</script></body></html>
+const grid = document.querySelector('#products');
+const search = document.querySelector('#search');
+const categoriesBox = document.querySelector('#categories');
+
+let all = [];
+let selectedCategory = '';
+let categories = [];
+
+function esc(s){
+  return String(s ?? '').replace(/[&<>"']/g,c=>({
+    '&':'&amp;',
+    '<':'&lt;',
+    '>':'&gt;',
+    '"':'&quot;',
+    "'":'&#39;'
+  }[c]));
+}
+
+function money(value){
+  if(value == null) return 'السعر غير متاح';
+  return Number(value).toLocaleString('ar-EG',{
+    maximumFractionDigits:2
+  })+' جنيه';
+}
+
+function render(){
+
+  const q = search.value.trim().toLowerCase();
+
+  const rows = all.filter(p =>
+    (p.title+' '+p.asin).toLowerCase().includes(q)
+  );
+
+  document.querySelector('#count').textContent = rows.length;
+
+  grid.innerHTML = rows.length
+    ? rows.map(p => `
+      <article class="card">
+        <div class="photo">
+          ${p.image_url
+            ? `<img loading="lazy" src="${esc(p.image_url)}" alt="">`
+            : 'لا توجد صورة'}
+        </div>
+        <div class="info">
+          <div class="name">${esc(p.title)}</div>
+          <div class="price">${money(p.price)}</div>
+          <div class="time">
+            اكتُشف: ${new Date(p.first_seen).toLocaleString('ar-EG')}
+          </div>
+          <a class="buy"
+             href="${esc(p.product_url)}"
+             target="_blank"
+             rel="noopener">
+            افتح المنتج على أمازون
+          </a>
+        </div>
+      </article>
+    `).join('')
+    : '<div class="empty">لا توجد منتجات في هذا القسم حتى الآن.</div>';
+}
+
+async function loadProducts(){
+
+  const url = selectedCategory
+    ? '/api/products?category='+encodeURIComponent(selectedCategory)
+    : '/api/products';
+
+  const response = await fetch(url);
+
+  if(!response.ok) throw Error('Products API');
+
+  all = await response.json();
+
+  render();
+}
+
+async function loadCategories(){
+
+  const response = await fetch('/api/categories');
+
+  if(!response.ok) throw Error('Categories API');
+
+  categories = await response.json();
+
+  categoriesBox.innerHTML = `
+    <button class="category ${selectedCategory === '' ? 'active' : ''}"
+      data-category="">
+      <span>كل المنتجات</span>
+      <small id="allCount">${categories.reduce((n,c)=>n+c.count,0)}</small>
+    </button>
+  `;
+
+  for(const c of categories){
+
+    const button = document.createElement('button');
+
+    button.className =
+      'category ' +
+      (selectedCategory === c.key ? 'active' : '');
+
+    button.dataset.category = c.key;
+
+    button.innerHTML = `
+      <span>${esc(c.name)}</span>
+      <small>${c.count}</small>
+    `;
+
+    categoriesBox.appendChild(button);
+  }
+}
+
+async function load(){
+
+  try{
+
+    await loadCategories();
+    await loadProducts();
+
+    document.querySelector('#state').textContent = 'متصل باللوحة';
+
+    document.querySelector('#last').textContent =
+      new Date().toLocaleTimeString('ar-EG');
+
+  }catch(error){
+
+    document.querySelector('#state').textContent =
+      'تعذر الاتصال بالخادم';
+
+    console.error(error);
+  }
+}
+
+categoriesBox.addEventListener('click',async event=>{
+
+  const button = event.target.closest('[data-category]');
+
+  if(!button) return;
+
+  selectedCategory = button.dataset.category;
+
+  const selected = categories.find(c=>c.key===selectedCategory);
+
+  document.querySelector('#pageTitle').textContent =
+    selected
+      ? selected.name+' — Amazon Resale'
+      : 'كل المنتجات — Amazon Resale';
+
+  await load();
+});
+
+search.addEventListener('input',render);
+
+document.querySelector('#refresh').addEventListener('click',async()=>{
+
+  const button = document.querySelector('#refresh');
+
+  button.disabled = true;
+  button.textContent = 'جاري الفحص...';
+
+  try{
+
+    const response = await fetch('/api/check',{
+      method:'POST'
+    });
+
+    const data = await response.json();
+
+    if(!response.ok){
+      throw Error(data.detail || 'فشل الفحص');
+    }
+
+    await load();
+
+    alert(
+      `تم فحص ${data.parsed} منتجاً\n`+
+      `المنتجات الجديدة: ${data.new}`
+    );
+
+  }catch(error){
+
+    alert('تعذر الفحص: '+error.message);
+
+  }finally{
+
+    button.disabled = false;
+    button.textContent = 'تحديث الآن';
+  }
+});
+
+load();
+setInterval(load,30000);
+</script>
+
+</body>
+</html>
