@@ -1,467 +1,823 @@
 
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Amazon Resale Radar</title>
 
 <style>
-:root{
-  font-family:Tahoma,Arial,sans-serif;
-  color:#17202b;
-  background:#f5f6f8;
+:root {
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --text: #172033;
+    --muted: #748094;
+    --border: #e5e9f0;
+    --primary: #2457d6;
+    --primary-light: #eaf0ff;
+    --green: #168653;
+    --red: #c33b3b;
 }
-*{box-sizing:border-box}
-body{margin:0}
-header{
-  background:#fff;
-  border-bottom:1px solid #e5e8ed;
-  padding:17px 24px;
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
+
+* {
+    box-sizing: border-box;
 }
-.brand{font-size:22px;font-weight:800}
-.brand span{color:#e58b20}
-.state{
-  font-size:12px;
-  background:#eef7f0;
-  color:#267244;
-  border-radius:30px;
-  padding:7px 12px;
+
+body {
+    margin: 0;
+    font-family: Arial, Tahoma, sans-serif;
+    background: var(--bg);
+    color: var(--text);
 }
-main{max-width:1250px;margin:25px auto;padding:0 18px}
-.head{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  gap:14px;
-  margin-bottom:20px;
+
+button, input {
+    font: inherit;
 }
-h1{font-size:25px;margin:0 0 7px}
-.muted{color:#707987;font-size:13px}
-.tools{
-  display:flex;
-  gap:9px;
-  flex-wrap:wrap;
-  margin:18px 0;
+
+.layout {
+    display: flex;
+    min-height: 100vh;
 }
-input{
-  font:inherit;
-  padding:11px 13px;
-  border:1px solid #d9dee7;
-  border-radius:10px;
-  min-width:240px;
+
+.sidebar {
+    width: 270px;
+    flex-shrink: 0;
+    background: var(--card);
+    border-left: 1px solid var(--border);
+    padding: 22px 15px;
 }
-button{
-  font:inherit;
-  border:0;
-  border-radius:10px;
-  background:#17202b;
-  color:white;
-  padding:11px 16px;
-  cursor:pointer;
+
+.brand {
+    padding: 5px 10px 22px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 18px;
 }
-button:disabled{opacity:.55;cursor:wait}
-.stats{
-  display:flex;
-  gap:10px;
-  flex-wrap:wrap;
-  margin:16px 0;
+
+.brand h2 {
+    font-size: 19px;
+    margin: 0 0 7px;
 }
-.stat{
-  background:white;
-  border:1px solid #e6e9ee;
-  border-radius:11px;
-  padding:11px 14px;
-  font-size:13px;
+
+.brand p {
+    color: var(--muted);
+    font-size: 12px;
+    margin: 0;
 }
-.layout{
-  display:grid;
-  grid-template-columns:220px minmax(0,1fr);
-  gap:18px;
-  align-items:start;
+
+.nav-title {
+    color: var(--muted);
+    font-size: 12px;
+    padding: 10px;
 }
-.sidebar{
-  background:white;
-  border:1px solid #e6e9ee;
-  border-radius:13px;
-  padding:12px;
-  position:sticky;
-  top:15px;
+
+.nav-button {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    padding: 11px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    text-align: right;
+    margin-bottom: 3px;
 }
-.side-title{
-  font-size:15px;
-  font-weight:800;
-  padding:8px 9px 13px;
+
+.nav-button:hover {
+    background: #f2f5fa;
 }
-.category{
-  width:100%;
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  background:transparent;
-  color:#394352;
-  text-align:right;
-  padding:12px 10px;
-  margin-bottom:4px;
-  border-radius:9px;
-  font-size:13px;
+
+.nav-button.active {
+    background: var(--primary-light);
+    color: var(--primary);
+    font-weight: bold;
 }
-.category:hover{background:#f5f6f8}
-.category.active{
-  background:#fff1df;
-  color:#8b4d09;
-  font-weight:800;
+
+.nav-button .count {
+    color: var(--muted);
+    font-size: 11px;
 }
-.category small{
-  color:#87909c;
-  font-size:11px;
+
+.subnav {
+    padding-right: 15px;
+    margin: 2px 0 12px;
+    border-right: 2px solid var(--border);
 }
-.content{min-width:0}
-.grid{
-  display:grid;
-  grid-template-columns:repeat(3,minmax(0,1fr));
-  gap:15px;
+
+.subnav .nav-button {
+    font-size: 13px;
+    padding: 9px 10px;
 }
-.card{
-  background:white;
-  border:1px solid #e6e9ee;
-  border-radius:13px;
-  overflow:hidden;
-  display:flex;
-  flex-direction:column;
+
+.main {
+    flex: 1;
+    min-width: 0;
+    padding: 25px;
 }
-.photo{
-  height:175px;
-  background:#fafbfc;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  padding:12px;
+
+.topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 15px;
+    flex-wrap: wrap;
+    margin-bottom: 22px;
 }
-.photo img{
-  width:100%;
-  height:100%;
-  object-fit:contain;
+
+.topbar h1 {
+    font-size: 23px;
+    margin: 0 0 6px;
 }
-.info{
-  padding:13px;
-  display:flex;
-  flex-direction:column;
-  gap:9px;
-  flex:1;
+
+.subtitle {
+    color: var(--muted);
+    font-size: 13px;
 }
-.name{
-  font-weight:700;
-  line-height:1.6;
-  min-height:44px;
+
+.actions {
+    display: flex;
+    gap: 9px;
+    flex-wrap: wrap;
 }
-.price{font-size:19px;font-weight:800}
-.time{font-size:12px;color:#77808d}
-.buy{
-  text-align:center;
-  text-decoration:none;
-  background:#fff1df;
-  color:#8b4d09;
-  border-radius:9px;
-  padding:10px;
-  font-size:13px;
-  font-weight:700;
+
+.btn {
+    border: 0;
+    border-radius: 8px;
+    padding: 11px 16px;
+    cursor: pointer;
+    font-weight: bold;
 }
-.empty{
-  grid-column:1/-1;
-  text-align:center;
-  background:#fff;
-  padding:35px;
-  border:1px dashed #ccd2dc;
-  border-radius:13px;
-  color:#727b88;
+
+.btn-primary {
+    color: white;
+    background: var(--primary);
 }
-.foot{
-  font-size:12px;
-  color:#7d8793;
-  line-height:1.8;
-  margin-top:22px;
+
+.btn-secondary {
+    color: var(--text);
+    background: white;
+    border: 1px solid var(--border);
 }
-@media(max-width:900px){
-  .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+
+.btn:disabled {
+    opacity: .55;
+    cursor: not-allowed;
 }
-@media(max-width:650px){
-  .layout{grid-template-columns:1fr}
-  .sidebar{position:static}
-  .category-list{
-    display:flex;
-    flex-wrap:wrap;
-    gap:5px;
-  }
-  .category{
-    width:auto;
-    margin:0;
-    gap:8px;
-  }
-  .head{align-items:start;flex-direction:column}
-  h1{font-size:22px}
+
+.stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 22px;
 }
-@media(max-width:390px){
-  .grid{grid-template-columns:1fr}
+
+.stat {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+}
+
+.stat-label {
+    color: var(--muted);
+    font-size: 12px;
+    margin-bottom: 10px;
+}
+
+.stat-value {
+    font-size: 25px;
+    font-weight: bold;
+}
+
+.section-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 22px 0 14px;
+    gap: 10px;
+}
+
+.section-heading h2 {
+    font-size: 18px;
+    margin: 0;
+}
+
+.product-count {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.products {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 15px;
+}
+
+.product {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.product-image {
+    height: 190px;
+    padding: 12px;
+    background: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.product-image img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+.no-image {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.product-info {
+    padding: 13px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
+.product-title {
+    font-size: 13px;
+    line-height: 1.6;
+    height: 62px;
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+
+.price {
+    font-size: 19px;
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+
+.price.unavailable {
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.product-categories {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 12px;
+}
+
+.tag {
+    font-size: 10px;
+    padding: 5px 7px;
+    border-radius: 5px;
+    background: var(--primary-light);
+    color: var(--primary);
+}
+
+.product-date {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: auto;
+    margin-bottom: 10px;
+}
+
+.amazon-link {
+    display: block;
+    text-align: center;
+    padding: 9px;
+    border-radius: 7px;
+    background: #f1f3f7;
+    color: var(--text);
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.amazon-link:hover {
+    background: var(--primary-light);
+    color: var(--primary);
+}
+
+.status-line {
+    padding: 12px 15px;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    color: var(--muted);
+    font-size: 12px;
+    margin-bottom: 17px;
+}
+
+.empty {
+    grid-column: 1 / -1;
+    padding: 45px 15px;
+    text-align: center;
+    color: var(--muted);
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+}
+
+.mobile-menu {
+    display: none;
+}
+
+@media (max-width: 1100px) {
+    .products {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 760px) {
+    .layout {
+        display: block;
+    }
+
+    .sidebar {
+        width: 100%;
+        border-left: 0;
+        border-bottom: 1px solid var(--border);
+        padding: 12px;
+    }
+
+    .brand {
+        padding-bottom: 12px;
+        margin-bottom: 8px;
+    }
+
+    .nav-groups {
+        display: flex;
+        overflow-x: auto;
+        gap: 5px;
+        padding-bottom: 5px;
+    }
+
+    .nav-group {
+        min-width: 145px;
+    }
+
+    .subnav {
+        display: none;
+    }
+
+    .nav-title {
+        display: none;
+    }
+
+    .main {
+        padding: 15px;
+    }
+
+    .stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .products {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 9px;
+    }
+
+    .product-image {
+        height: 145px;
+    }
+
+    .product-title {
+        font-size: 12px;
+    }
+
+    .topbar h1 {
+        font-size: 19px;
+    }
+}
+
+@media (max-width: 380px) {
+    .products {
+        grid-template-columns: 1fr;
+    }
 }
 </style>
 </head>
 
 <body>
 
-<header>
-  <div class="brand">أقل <span>سعر</span></div>
-  <div class="state" id="state">جاري الاتصال...</div>
-</header>
-
-<main>
-
-  <div class="head">
-    <div>
-      <h1 id="pageTitle">كل المنتجات — Amazon Resale</h1>
-      <div class="muted">اكتشاف المنتجات ومتابعة الإضافات الجديدة</div>
-    </div>
-    <div class="muted">Amazon.eg · Resale</div>
-  </div>
-
-  <div class="tools">
-    <input id="search" type="search"
-      placeholder="ابحث باسم المنتج أو ASIN">
-    <button id="refresh">تحديث الآن</button>
-  </div>
-
-  <div class="stats">
-    <div class="stat">
-      إجمالي المنتجات: <b id="count">—</b>
-    </div>
-    <div class="stat">
-      آخر تحديث: <b id="last">—</b>
-    </div>
-  </div>
-
-  <div class="layout">
+<div class="layout">
 
     <aside class="sidebar">
-      <div class="side-title">تصفح الأقسام</div>
-      <div class="category-list" id="categories">
-        <button class="category active" data-category="">
-          <span>كل المنتجات</span>
-          <small id="allCount">—</small>
-        </button>
-      </div>
+
+        <div class="brand">
+            <h2>Amazon Resale Radar</h2>
+            <p>متابعة منتجات أمازون المستعملة والمخفضة</p>
+        </div>
+
+        <div class="nav-title">الأقسام الرئيسية والفرعية</div>
+
+        <div class="nav-groups" id="navigation">
+
+            <button class="nav-button active"
+                    data-category=""
+                    onclick="selectCategory('', 'كل المنتجات')">
+                <span>كل المنتجات</span>
+                <span class="count" id="allCount">0</span>
+            </button>
+
+        </div>
+
     </aside>
 
-    <section class="content">
-      <div class="grid" id="products">
-        <div class="empty">جاري تحميل المنتجات...</div>
-      </div>
-    </section>
+    <main class="main">
 
-  </div>
+        <div class="topbar">
 
-  <div class="foot">
-    يتم جمع المنتجات من الأقسام المحددة.
-    قد يتوقف الجلب مؤقتاً إذا غيّرت أمازون طريقة عرض الصفحات
-    أو طلبت تحققاً إضافياً.
-  </div>
+            <div>
+                <h1 id="pageTitle">كل المنتجات</h1>
+                <div class="subtitle">
+                    متابعة المنتجات الجديدة في Amazon Resale Egypt
+                </div>
+            </div>
 
-</main>
+            <div class="actions">
+                <button class="btn btn-secondary"
+                        onclick="loadData()">
+                    تحديث العرض
+                </button>
+
+                <button class="btn btn-primary"
+                        id="scanButton"
+                        onclick="startScan()">
+                    فحص أمازون الآن
+                </button>
+            </div>
+
+        </div>
+
+        <div class="stats">
+
+            <div class="stat">
+                <div class="stat-label">إجمالي المنتجات المحفوظة</div>
+                <div class="stat-value" id="totalProducts">0</div>
+            </div>
+
+            <div class="stat">
+                <div class="stat-label">مسارات الفحص</div>
+                <div class="stat-value" id="routeCount">22</div>
+            </div>
+
+            <div class="stat">
+                <div class="stat-label">حالة الجدولة التلقائية</div>
+                <div class="stat-value" id="schedulerStatus">متوقفة</div>
+            </div>
+
+        </div>
+
+        <div class="status-line" id="statusLine">
+            جاري تحميل بيانات النظام...
+        </div>
+
+        <div class="section-heading">
+            <h2 id="productsHeading">أحدث المنتجات</h2>
+            <div class="product-count" id="productCount">0 منتج</div>
+        </div>
+
+        <div class="products" id="productsGrid">
+            <div class="empty">جاري تحميل المنتجات...</div>
+        </div>
+
+    </main>
+
+</div>
 
 <script>
-const grid = document.querySelector('#products');
-const search = document.querySelector('#search');
-const categoriesBox = document.querySelector('#categories');
 
-let all = [];
-let selectedCategory = '';
-let categories = [];
+let selectedCategory = "";
+let selectedTitle = "كل المنتجات";
 
-function esc(s){
-  return String(s ?? '').replace(/[&<>"']/g,c=>({
-    '&':'&amp;',
-    '<':'&lt;',
-    '>':'&gt;',
-    '"':'&quot;',
-    "'":'&#39;'
-  }[c]));
+let categoryData = [];
+let productsData = [];
+
+const navigation = document.getElementById("navigation");
+
+function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;"
+    })[char]);
 }
 
-function money(value){
-  if(value == null) return 'السعر غير متاح';
-  return Number(value).toLocaleString('ar-EG',{
-    maximumFractionDigits:2
-  })+' جنيه';
-}
-
-function render(){
-
-  const q = search.value.trim().toLowerCase();
-
-  const rows = all.filter(p =>
-    (p.title+' '+p.asin).toLowerCase().includes(q)
-  );
-
-  document.querySelector('#count').textContent = rows.length;
-
-  grid.innerHTML = rows.length
-    ? rows.map(p => `
-      <article class="card">
-        <div class="photo">
-          ${p.image_url
-            ? `<img loading="lazy" src="${esc(p.image_url)}" alt="">`
-            : 'لا توجد صورة'}
-        </div>
-        <div class="info">
-          <div class="name">${esc(p.title)}</div>
-          <div class="price">${money(p.price)}</div>
-          <div class="time">
-            اكتُشف: ${new Date(p.first_seen).toLocaleString('ar-EG')}
-          </div>
-          <a class="buy"
-             href="${esc(p.product_url)}"
-             target="_blank"
-             rel="noopener">
-            افتح المنتج على أمازون
-          </a>
-        </div>
-      </article>
-    `).join('')
-    : '<div class="empty">لا توجد منتجات في هذا القسم حتى الآن.</div>';
-}
-
-async function loadProducts(){
-
-  const url = selectedCategory
-    ? '/api/products?category='+encodeURIComponent(selectedCategory)
-    : '/api/products';
-
-  const response = await fetch(url);
-
-  if(!response.ok) throw Error('Products API');
-
-  all = await response.json();
-
-  render();
-}
-
-async function loadCategories(){
-
-  const response = await fetch('/api/categories');
-
-  if(!response.ok) throw Error('Categories API');
-
-  categories = await response.json();
-
-  categoriesBox.innerHTML = `
-    <button class="category ${selectedCategory === '' ? 'active' : ''}"
-      data-category="">
-      <span>كل المنتجات</span>
-      <small id="allCount">${categories.reduce((n,c)=>n+c.count,0)}</small>
-    </button>
-  `;
-
-  for(const c of categories){
-
-    const button = document.createElement('button');
-
-    button.className =
-      'category ' +
-      (selectedCategory === c.key ? 'active' : '');
-
-    button.dataset.category = c.key;
-
-    button.innerHTML = `
-      <span>${esc(c.name)}</span>
-      <small>${c.count}</small>
-    `;
-
-    categoriesBox.appendChild(button);
-  }
-}
-
-async function load(){
-
-  try{
-
-    await loadCategories();
-    await loadProducts();
-
-    document.querySelector('#state').textContent = 'متصل باللوحة';
-
-    document.querySelector('#last').textContent =
-      new Date().toLocaleTimeString('ar-EG');
-
-  }catch(error){
-
-    document.querySelector('#state').textContent =
-      'تعذر الاتصال بالخادم';
-
-    console.error(error);
-  }
-}
-
-categoriesBox.addEventListener('click',async event=>{
-
-  const button = event.target.closest('[data-category]');
-
-  if(!button) return;
-
-  selectedCategory = button.dataset.category;
-
-  const selected = categories.find(c=>c.key===selectedCategory);
-
-  document.querySelector('#pageTitle').textContent =
-    selected
-      ? selected.name+' — Amazon Resale'
-      : 'كل المنتجات — Amazon Resale';
-
-  await load();
-});
-
-search.addEventListener('input',render);
-
-document.querySelector('#refresh').addEventListener('click',async()=>{
-
-  const button = document.querySelector('#refresh');
-
-  button.disabled = true;
-  button.textContent = 'جاري الفحص...';
-
-  try{
-
-    const response = await fetch('/api/check',{
-      method:'POST'
-    });
-
-    const data = await response.json();
-
-    if(!response.ok){
-      throw Error(data.detail || 'فشل الفحص');
+function formatPrice(price) {
+    if (price === null || price === undefined || price === "") {
+        return "السعر غير متاح";
     }
 
-    await load();
+    return Number(price).toLocaleString("ar-EG") + " جنيه";
+}
 
-    alert(
-      `تم فحص ${data.parsed} منتجاً\n`+
-      `المنتجات الجديدة: ${data.new}`
+function formatDate(value) {
+    if (!value) return "غير متاح";
+
+    const date = new Date(value);
+
+    if (isNaN(date.getTime())) return "غير متاح";
+
+    return date.toLocaleString("ar-EG");
+}
+
+function renderNavigation() {
+
+    const groups = {};
+
+    categoryData.forEach(category => {
+        if (!groups[category.parent]) {
+            groups[category.parent] = [];
+        }
+
+        groups[category.parent].push(category);
+    });
+
+    let html = `
+        <button class="nav-button ${selectedCategory === "" ? "active" : ""}"
+                data-category=""
+                onclick="selectCategory('', 'كل المنتجات')">
+            <span>كل المنتجات</span>
+            <span class="count">${productsData.length}</span>
+        </button>
+    `;
+
+    Object.entries(groups).forEach(([parent, children]) => {
+
+        const parentCount = children.reduce(
+            (sum, item) => sum + Number(item.count || 0),
+            0
+        );
+
+        const isParentSelected = selectedCategory === parent;
+
+        html += `
+            <div class="nav-group">
+
+                <button class="nav-button ${isParentSelected ? "active" : ""}"
+                        onclick="selectCategory('${escapeHtml(parent)}', '${escapeHtml(parent)}')">
+                    <span>${escapeHtml(parent)}</span>
+                    <span class="count">${parentCount}</span>
+                </button>
+
+                <div class="subnav">
+        `;
+
+        children.forEach(child => {
+
+            const active = selectedCategory === child.key;
+
+            html += `
+                <button class="nav-button ${active ? "active" : ""}"
+                        onclick="selectCategory('${escapeHtml(child.key)}', '${escapeHtml(child.name)}')">
+                    <span>${escapeHtml(child.name)}</span>
+                    <span class="count">${Number(child.count || 0)}</span>
+                </button>
+            `;
+        });
+
+        html += `
+                </div>
+            </div>
+        `;
+    });
+
+    navigation.innerHTML = html;
+
+    document.getElementById("allCount").textContent =
+        productsData.length;
+}
+
+async function loadData() {
+
+    try {
+
+        const [categoriesResponse, productsResponse, statusResponse] =
+            await Promise.all([
+                fetch("/api/categories"),
+                fetch(
+                    selectedCategory
+                    ? "/api/products?category=" + encodeURIComponent(selectedCategory)
+                    : "/api/products"
+                ),
+                fetch("/api/status")
+            ]);
+
+        if (!categoriesResponse.ok ||
+            !productsResponse.ok ||
+            !statusResponse.ok) {
+            throw new Error("تعذر تحميل بيانات النظام");
+        }
+
+        categoryData = await categoriesResponse.json();
+        productsData = await productsResponse.json();
+
+        const status = await statusResponse.json();
+
+        document.getElementById("totalProducts").textContent =
+            Number(status.saved_products || 0).toLocaleString("ar-EG");
+
+        document.getElementById("routeCount").textContent =
+            Number(status.routes_count || 0).toLocaleString("ar-EG");
+
+        document.getElementById("schedulerStatus").textContent =
+            status.scheduler_running ? "تعمل" : "متوقفة";
+
+        const errors = categoryData.filter(
+            item => item.last_error
+        ).length;
+
+        document.getElementById("statusLine").textContent =
+            `قاعدة البيانات: ${status.database} | ` +
+            `مسارات الفحص: ${status.routes_count} | ` +
+            `الأخطاء المسجلة: ${errors} | ` +
+            `الفحص التلقائي: ${status.scheduler_running ? "يعمل" : "متوقف"}`;
+
+        renderNavigation();
+        renderProducts();
+
+    } catch (error) {
+
+        document.getElementById("statusLine").textContent =
+            "تعذر الاتصال بالنظام: " + error.message;
+
+        document.getElementById("productsGrid").innerHTML =
+            `<div class="empty">تعذر تحميل المنتجات حاليًا.</div>`;
+    }
+}
+
+function selectCategory(category, title) {
+
+    selectedCategory = category;
+    selectedTitle = title;
+
+    document.getElementById("pageTitle").textContent = title;
+    document.getElementById("productsHeading").textContent =
+        category ? "منتجات " + title : "أحدث المنتجات";
+
+    loadData();
+}
+
+function renderProducts() {
+
+    const grid = document.getElementById("productsGrid");
+
+    document.getElementById("productCount").textContent =
+        productsData.length.toLocaleString("ar-EG") + " منتج";
+
+    if (!productsData.length) {
+        grid.innerHTML = `
+            <div class="empty">
+                لا توجد منتجات في هذا القسم حتى الآن.
+            </div>
+        `;
+        return;
+    }
+
+    grid.innerHTML = productsData.map(product => {
+
+        const image = product.image_url
+            ? `<img src="${escapeHtml(product.image_url)}"
+                    alt="${escapeHtml(product.title)}"
+                    loading="lazy"
+                    onerror="this.style.display='none'">`
+            : `<div class="no-image">لا توجد صورة</div>`;
+
+        const priceClass =
+            product.price === null || product.price === undefined
+            ? "price unavailable"
+            : "price";
+
+        const categories = (product.categories || [])
+            .map(key => {
+                const item = categoryData.find(
+                    category => category.key === key
+                );
+
+                return item
+                    ? `<span class="tag">${escapeHtml(item.name)}</span>`
+                    : "";
+            })
+            .join("");
+
+        return `
+            <article class="product">
+
+                <div class="product-image">
+                    ${image}
+                </div>
+
+                <div class="product-info">
+
+                    <div class="product-title">
+                        ${escapeHtml(product.title)}
+                    </div>
+
+                    <div class="${priceClass}">
+                        ${formatPrice(product.price)}
+                    </div>
+
+                    <div class="product-categories">
+                        ${categories}
+                    </div>
+
+                    <div class="product-date">
+                        تاريخ الاكتشاف: ${formatDate(product.first_seen)}
+                    </div>
+
+                    <a class="amazon-link"
+                       href="${escapeHtml(product.product_url)}"
+                       target="_blank"
+                       rel="noopener noreferrer">
+                        عرض على أمازون
+                    </a>
+
+                </div>
+
+            </article>
+        `;
+
+    }).join("");
+}
+
+async function startScan() {
+
+    const button = document.getElementById("scanButton");
+
+    const confirmed = confirm(
+        "سيتم فحص مسارات أمازون الـ22. " +
+        "قد تستغرق العملية وقتًا، وسيتم إرسال طلبات متعددة إلى أمازون. " +
+        "هل تريد المتابعة؟"
     );
 
-  }catch(error){
+    if (!confirmed) return;
 
-    alert('تعذر الفحص: '+error.message);
+    button.disabled = true;
+    button.textContent = "جاري الفحص...";
 
-  }finally{
+    document.getElementById("statusLine").textContent =
+        "بدأ الفحص اليدوي. يرجى الانتظار...";
 
-    button.disabled = false;
-    button.textContent = 'تحديث الآن';
-  }
-});
+    try {
 
-load();
-setInterval(load,30000);
+        const response = await fetch("/api/check", {
+            method: "POST"
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(
+                result.detail || "فشل تنفيذ الفحص"
+            );
+        }
+
+        if (result.busy) {
+            document.getElementById("statusLine").textContent =
+                "هناك فحص آخر قيد التنفيذ.";
+        } else {
+            document.getElementById("statusLine").textContent =
+                `انتهى الفحص | الصفحات: ${result.pages_scanned} | ` +
+                `المنتجات المستخرجة: ${result.parsed} | ` +
+                `الجديدة: ${result.new} | ` +
+                `الأخطاء: ${result.errors}`;
+        }
+
+        await loadData();
+
+    } catch (error) {
+
+        document.getElementById("statusLine").textContent =
+            "حدث خطأ أثناء الفحص: " + error.message;
+
+    } finally {
+
+        button.disabled = false;
+        button.textContent = "فحص أمازون الآن";
+    }
+}
+
+loadData();
+
+// تحديث عرض البيانات من قاعدة البيانات فقط
+setInterval(loadData, 30000);
+
 </script>
 
 </body>
