@@ -15,8 +15,6 @@
     --border: #e5e9f0;
     --primary: #2457d6;
     --primary-light: #eaf0ff;
-    --green: #168653;
-    --red: #c33b3b;
 }
 
 * {
@@ -319,6 +317,8 @@ button, input {
     color: var(--muted);
     font-size: 12px;
     margin-bottom: 17px;
+    direction: ltr;
+    text-align: right;
 }
 
 .empty {
@@ -329,10 +329,6 @@ button, input {
     background: white;
     border: 1px solid var(--border);
     border-radius: 12px;
-}
-
-.mobile-menu {
-    display: none;
 }
 
 @media (max-width: 1100px) {
@@ -424,16 +420,7 @@ button, input {
 
         <div class="nav-title">الأقسام الرئيسية والفرعية</div>
 
-        <div class="nav-groups" id="navigation">
-
-            <button class="nav-button active"
-                    data-category=""
-                    onclick="selectCategory('', 'كل المنتجات')">
-                <span>كل المنتجات</span>
-                <span class="count" id="allCount">0</span>
-            </button>
-
-        </div>
+        <div class="nav-groups" id="navigation"></div>
 
     </aside>
 
@@ -449,8 +436,7 @@ button, input {
             </div>
 
             <div class="actions">
-                <button class="btn btn-secondary"
-                        onclick="loadData()">
+                <button class="btn btn-secondary" onclick="loadData()">
                     تحديث العرض
                 </button>
 
@@ -472,7 +458,7 @@ button, input {
 
             <div class="stat">
                 <div class="stat-label">مسارات الفحص</div>
-                <div class="stat-value" id="routeCount">22</div>
+                <div class="stat-value" id="routeCount">0</div>
             </div>
 
             <div class="stat">
@@ -502,8 +488,6 @@ button, input {
 <script>
 
 let selectedCategory = "";
-let selectedTitle = "كل المنتجات";
-
 let categoryData = [];
 let productsData = [];
 
@@ -551,10 +535,9 @@ function renderNavigation() {
 
     let html = `
         <button class="nav-button ${selectedCategory === "" ? "active" : ""}"
-                data-category=""
                 onclick="selectCategory('', 'كل المنتجات')">
             <span>كل المنتجات</span>
-            <span class="count">${productsData.length}</span>
+            <span class="count" id="allCount">${productsData.length}</span>
         </button>
     `;
 
@@ -599,9 +582,6 @@ function renderNavigation() {
     });
 
     navigation.innerHTML = html;
-
-    document.getElementById("allCount").textContent =
-        productsData.length;
 }
 
 async function loadData() {
@@ -665,7 +645,6 @@ async function loadData() {
 function selectCategory(category, title) {
 
     selectedCategory = category;
-    selectedTitle = title;
 
     document.getElementById("pageTitle").textContent = title;
     document.getElementById("productsHeading").textContent =
@@ -815,7 +794,7 @@ async function startScan() {
 
 loadData();
 
-// تحديث عرض البيانات من قاعدة البيانات فقط
+// تحديث عرض البيانات من قاعدة البيانات فقط، دون بدء فحص جديد
 setInterval(loadData, 30000);
 
 </script>
