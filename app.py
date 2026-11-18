@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 import sqlite3
 import logging
@@ -10,7 +11,7 @@ import threading
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -27,7 +28,7 @@ from scraper import (
 
 
 # ==========================================
-# إعدادات عامة
+# الإعدادات العامة
 # ==========================================
 
 logging.basicConfig(
@@ -39,11 +40,11 @@ logger = logging.getLogger("resale-radar-v2")
 
 ROOT = Path(__file__).resolve().parent
 
-# قاعدة بيانات مستقلة للنظام الجديد
 DB_PATH = ROOT / "resale_v2.db"
 
+# السماح بفاصل 30 ثانية
 INTERVAL_SECONDS = max(
-    60,
+    30,
     int(os.getenv("CHECK_INTERVAL_SECONDS", "300"))
 )
 
@@ -91,7 +92,7 @@ def utc_now() -> str:
 
 
 # ==========================================
-# قاعدة البيانات
+# قاعدة البيانات والترقيات
 # ==========================================
 
 def connect():
@@ -139,6 +140,27 @@ def init_db():
         """)
 
         db.execute("""
+            CREATE TABLE IF NOT EXISTS app_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+
+        # إضافة عمود التوقف المؤقت إن لم يكن موجودًا
+        columns = {
+            row["name"]
+            for row in db.execute(
+                "PRAGMA table_info(scan_state)"
+            ).fetchall()
+        }
+
+        if "pagination_blocked_url" not in columns:
+            db.execute("""
+                ALTER TABLE scan_state
+                ADD COLUMN pagination_blocked_url TEXT
+            """)
+
+        db.execute("""
             CREATE INDEX IF NOT EXISTS idx_products_first_seen
             ON products(first_seen)
         """)
@@ -155,6 +177,32 @@ def init_db():
                 VALUES (?)
             """, (key,))
 
+        # ترقية واحدة فقط:
+        # إعادة فتح المسارات التي أُغلقت بالمنطق القديم
+        migration = db.execute("""
+            SELECT value
+            FROM app_meta
+            WHERE key='pagination_logic_v2'
+        """).fetchone()
+
+        if not migration:
+
+            db.execute("""
+                UPDATE scan_state
+                SET completed=0,
+                    pagination_blocked_url=NULL
+                WHERE completed=1
+            """)
+
+            db.execute("""
+                INSERT INTO app_meta(key, value)
+                VALUES ('pagination_logic_v2', '1')
+            """)
+
+            logger.info(
+                "Pagination migration completed"
+            )
+
         db.commit()
 
     logger.info(
@@ -162,6 +210,97 @@ def init_db():
         DB_PATH,
         len(CATEGORIES)
     )
+
+
+# ==========================================
+# التحقق من نهاية نتائج أمازون
+# ==========================================
+
+def is_explicit_end_page(html: str) -> bool:
+
+    if not html:
+        return False
+
+    # نبحث عن علامات واضحة لصفحة عدم وجود نتائج
+    if re.search(
+        r'class=["\'][^"\']*s-no-results',
+        html,
+        re.IGNORECASE
+    ):
+        return True
+
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = text.lower()
+
+    markers = (
+        "we couldn't find any results",
+        "we could not find any results",
+        "no results found",
+        "لم يتم العثور على نتائج",
+        "لا توجد نتائج",
+    )
+
+    return any(marker in text for marker in markers)
+
+
+# ==========================================
+# التحقق من أن أمازون أعاد القسم المطلوب
+# ==========================================
+
+def validate_route_url(
+    expected_url: str,
+    final_url: str
+) -> None:
+
+    expected = urlparse(expected_url)
+    actual = urlparse(final_url)
+
+    host = actual.netloc.lower()
+
+    if host not in ("amazon.eg", "www.amazon.eg"):
+        raise RuntimeError(
+            "Amazon redirected to an unexpected host"
+        )
+
+    expected_params = parse_qs(expected.query)
+    actual_params = parse_qs(actual.query)
+
+    expected_department = expected_params.get("i", [])
+    actual_department = actual_params.get("i", [])
+
+    if expected_department:
+        if not actual_department:
+            raise RuntimeError(
+                "Amazon response lost the department filter"
+            )
+
+        if expected_department[0] != actual_department[0]:
+            raise RuntimeError(
+                "Amazon redirected to a different department"
+            )
+
+    expected_rh = expected_params.get("rh", [])
+    actual_rh = actual_params.get("rh", [])
+
+    if expected_rh:
+        if not actual_rh:
+            raise RuntimeError(
+                "Amazon response lost the category filters"
+            )
+
+        expected_tokens = [
+            token.strip()
+            for token in expected_rh[0].split(",")
+            if token.strip()
+        ]
+
+        actual_filter = actual_rh[0]
+
+        for token in expected_tokens:
+            if token not in actual_filter:
+                raise RuntimeError(
+                    "Amazon response changed the category filters"
+                )
 
 
 # ==========================================
@@ -175,6 +314,7 @@ def fetch_url(url: str) -> tuple[str, str]:
     for attempt in range(1, 4):
 
         try:
+
             response = session.get(
                 url,
                 timeout=REQUEST_TIMEOUT
@@ -197,12 +337,6 @@ def fetch_url(url: str) -> tuple[str, str]:
             response.raise_for_status()
 
             final_url = response.url
-            host = urlparse(final_url).netloc.lower()
-
-            if host not in ("amazon.eg", "www.amazon.eg"):
-                raise RuntimeError(
-                    "Amazon redirected to an unexpected host"
-                )
 
             html = response.text
             lowered = html.lower()
@@ -220,6 +354,7 @@ def fetch_url(url: str) -> tuple[str, str]:
             return html, final_url
 
         except requests.RequestException:
+
             logger.exception(
                 "Amazon request failed, attempt=%s",
                 attempt
@@ -341,29 +476,55 @@ def update_scan_state(
     completed: bool,
     parsed: int,
     new: int,
-    error: str | None = None
+    error: str | None = None,
+    blocked_url: str | None = None
 ):
 
     with closing(connect()) as db:
 
-        db.execute("""
-            UPDATE scan_state
-            SET next_url=?,
-                completed=?,
-                last_success=?,
-                last_error=?,
-                last_parsed=?,
-                last_new=?
-            WHERE category_key=?
-        """, (
-            next_url,
-            int(completed),
-            utc_now() if error is None else None,
-            error[:1000] if error else None,
-            parsed,
-            new,
-            category_key
-        ))
+        if error is None:
+
+            db.execute("""
+                UPDATE scan_state
+                SET next_url=?,
+                    completed=?,
+                    last_success=?,
+                    last_error=NULL,
+                    last_parsed=?,
+                    last_new=?,
+                    pagination_blocked_url=?
+                WHERE category_key=?
+            """, (
+                next_url,
+                int(completed),
+                utc_now(),
+                parsed,
+                new,
+                blocked_url,
+                category_key
+            ))
+
+        else:
+
+            # لا نمسح آخر توقيت فحص ناجح عند الخطأ
+            db.execute("""
+                UPDATE scan_state
+                SET next_url=?,
+                    completed=?,
+                    last_error=?,
+                    last_parsed=?,
+                    last_new=?,
+                    pagination_blocked_url=?
+                WHERE category_key=?
+            """, (
+                next_url,
+                int(completed),
+                error[:1000],
+                parsed,
+                new,
+                blocked_url,
+                category_key
+            ))
 
         db.commit()
 
@@ -378,6 +539,7 @@ def scan_route(category_key: str) -> dict:
         raise ValueError("Unknown category")
 
     with closing(connect()) as db:
+
         state = db.execute("""
             SELECT *
             FROM scan_state
@@ -388,6 +550,7 @@ def scan_route(category_key: str) -> dict:
         raise RuntimeError("Scan state not initialized")
 
     saved_next_url = state["next_url"]
+    blocked_url = state["pagination_blocked_url"]
     was_completed = bool(state["completed"])
 
     first_url = build_start_url(category_key)
@@ -395,9 +558,12 @@ def scan_route(category_key: str) -> dict:
     pages = 0
     parsed = 0
     new = 0
+
     completed = was_completed
     error = None
+
     next_cursor = saved_next_url
+    current_blocked_url = blocked_url
 
     try:
 
@@ -407,11 +573,37 @@ def scan_route(category_key: str) -> dict:
 
         html, final_url = fetch_url(first_url)
 
+        validate_route_url(first_url, final_url)
+
         first_products = parse_resale_html(html)
 
         if not first_products:
+
+            if is_explicit_end_page(html):
+
+                update_scan_state(
+                    category_key,
+                    None,
+                    True,
+                    0,
+                    0,
+                    blocked_url=None
+                )
+
+                return {
+                    "key": category_key,
+                    "name": CATEGORIES[category_key]["name"],
+                    "parent": CATEGORIES[category_key]["parent"],
+                    "pages_scanned": 1,
+                    "parsed": 0,
+                    "new": 0,
+                    "completed": True,
+                    "next_url": None,
+                    "error": None
+                }
+
             raise RuntimeError(
-                "No products parsed from first page; "
+                "First page returned no parseable products; "
                 "pagination state preserved"
             )
 
@@ -428,73 +620,146 @@ def scan_route(category_key: str) -> dict:
         pages += 1
         parsed += len(first_products)
 
-        # إذا كان المسار مكتملًا سابقًا،
-        # نستمر في مراقبة الصفحة الأولى فقط.
-        if was_completed:
+        # ----------------------------------
+        # المسار المكتمل سابقًا
+        # ----------------------------------
+
+        if was_completed and not first_next:
+
             next_cursor = None
             completed = True
+            current_blocked_url = None
 
         else:
 
-            # أول صفحة عميقة هي الصفحة التالية
-            deep_url = saved_next_url or first_next
+            # إذا ظهر رابط جديد بعد اكتمال سابق،
+            # نعيد فتح المسار لمتابعة النتائج.
+            if was_completed and first_next:
+                saved_next_url = None
+                current_blocked_url = None
 
-            if deep_url and deep_url != final_url:
+            # اختيار المؤشر المستقل لهذا المسار
+            if saved_next_url and saved_next_url != current_blocked_url:
+                deep_url = saved_next_url
+            elif first_next and first_next != current_blocked_url:
+                deep_url = first_next
+                current_blocked_url = None
+            else:
+                deep_url = None
 
-                time.sleep(PAGE_DELAY)
+            if not deep_url:
 
-                deep_html, deep_final_url = fetch_url(
-                    deep_url
-                )
-
-                deep_products = parse_resale_html(
-                    deep_html
-                )
-
-                if not deep_products:
-                    # لا نخترع صفحة جديدة.
-                    # نوقف التوسع العميق لهذا المسار
-                    # ونستمر في مراقبة الصفحة الأولى.
-                    completed = True
+                if current_blocked_url:
+                    next_cursor = current_blocked_url
+                    error = (
+                        "Pagination paused: the previous page "
+                        "could not be safely advanced"
+                    )
+                else:
                     next_cursor = None
+                    error = (
+                        "Pagination not confirmed: Amazon did not "
+                        "provide a valid next-page link"
+                    )
 
-                    logger.warning(
-                        "Route=%s reached an empty deep page",
-                        category_key
+                completed = False
+
+            else:
+
+                # لا نكرر طلب صفحة متوقفة بنفس الرابط
+                if deep_url == current_blocked_url:
+
+                    next_cursor = deep_url
+                    completed = False
+
+                    error = (
+                        "Pagination paused: this page needs "
+                        "further validation"
                     )
 
                 else:
 
-                    deep_next = extract_next_page_url(
-                        deep_html,
+                    next_cursor = deep_url
+
+                    time.sleep(PAGE_DELAY)
+
+                    deep_html, deep_final_url = fetch_url(
+                        deep_url
+                    )
+
+                    validate_route_url(
+                        first_url,
                         deep_final_url
                     )
 
-                    new += save_products(
-                        deep_products,
-                        category_key
+                    deep_products = parse_resale_html(
+                        deep_html
                     )
 
-                    pages += 1
-                    parsed += len(deep_products)
+                    if not deep_products:
 
-                    if deep_next:
-                        next_cursor = deep_next
-                        completed = False
+                        if is_explicit_end_page(deep_html):
+
+                            next_cursor = None
+                            completed = True
+                            current_blocked_url = None
+                            error = None
+
+                        else:
+
+                            # لا نعلن اكتمال المسار.
+                            # نحتفظ بالرابط المتوقف دون اختراع صفحة.
+                            next_cursor = deep_url
+                            completed = False
+                            current_blocked_url = deep_url
+
+                            error = (
+                                "Pagination paused: deep page "
+                                "returned no parseable products"
+                            )
+
                     else:
-                        next_cursor = None
-                        completed = True
 
-            else:
-                next_cursor = None
-                completed = True
+                        deep_next = extract_next_page_url(
+                            deep_html,
+                            deep_final_url
+                        )
+
+                        new += save_products(
+                            deep_products,
+                            category_key
+                        )
+
+                        pages += 1
+                        parsed += len(deep_products)
+
+                        if deep_next:
+
+                            next_cursor = deep_next
+                            completed = False
+                            current_blocked_url = None
+                            error = None
+
+                        else:
+
+                            # لا نفترض أن غياب الرابط يعني النهاية.
+                            next_cursor = deep_url
+                            completed = False
+                            current_blocked_url = deep_url
+
+                            error = (
+                                "Pagination paused: no verified "
+                                "next-page link was found"
+                            )
 
         update_scan_state(
             category_key=category_key,
             next_url=next_cursor,
             completed=completed,
             parsed=parsed,
-            new=new
+            new=new,
+            error=error,
+            blocked_url=current_blocked_url
         )
 
     except Exception as exc:
@@ -509,12 +774,15 @@ def scan_route(category_key: str) -> dict:
         # لا نغيّر مؤشر الصفحة عند فشل الطلب
         update_scan_state(
             category_key=category_key,
-            next_url=saved_next_url,
-            completed=was_completed,
+            next_url=next_cursor,
+            completed=False,
             parsed=parsed,
             new=new,
-            error=error
+            error=error,
+            blocked_url=current_blocked_url
         )
+
+        completed = False
 
     category = CATEGORIES[category_key]
 
@@ -607,7 +875,8 @@ def startup():
             seconds=INTERVAL_SECONDS,
             id="resale-check",
             max_instances=1,
-            coalesce=True
+            coalesce=True,
+            replace_existing=True
         )
 
         scheduler.start()
@@ -629,7 +898,7 @@ def shutdown():
 
 
 # ==========================================
-# صفحات الموقع
+# صفحة الموقع
 # ==========================================
 
 @app.get("/")
@@ -696,7 +965,7 @@ def products(category: str | None = None):
     with closing(connect()) as db:
 
         if category and category not in CATEGORIES:
-            # السماح أيضًا بالتصفية باسم القسم الرئيسي
+
             parents = {
                 value["parent"]
                 for value in CATEGORIES.values()
@@ -708,27 +977,13 @@ def products(category: str | None = None):
                     detail="Unknown category"
                 )
 
-            rows = db.execute("""
-                SELECT DISTINCT p.*
-                FROM products p
-                JOIN product_categories pc
-                    ON pc.asin=p.asin
-                JOIN scan_state ss
-                    ON ss.category_key=pc.category_key
-                WHERE pc.category_key IN (
-                    SELECT category_key
-                    FROM scan_state
-                )
-                ORDER BY p.first_seen DESC
-            """).fetchall()
-
-            # فلترة القسم الرئيسي من مفاتيح المسارات
             allowed_keys = [
                 key for key, value in CATEGORIES.items()
                 if value["parent"] == category
             ]
 
             if allowed_keys:
+
                 placeholders = ",".join(
                     "?" for _ in allowed_keys
                 )
@@ -741,6 +996,9 @@ def products(category: str | None = None):
                     WHERE pc.category_key IN ({placeholders})
                     ORDER BY p.first_seen DESC
                 """, allowed_keys).fetchall()
+
+            else:
+                rows = []
 
         elif category:
 
@@ -833,7 +1091,18 @@ def manual_check():
         )
 
     try:
-        return run_check()
+        result = run_check()
+
+        if result.get("busy"):
+            raise HTTPException(
+                status_code=409,
+                detail="A scan is already running"
+            )
+
+        return result
+
+    except HTTPException:
+        raise
 
     except Exception as exc:
 
