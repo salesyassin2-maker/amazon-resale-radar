@@ -11,54 +11,285 @@ from bs4 import BeautifulSoup
 
 BASE_URL = "https://www.amazon.eg/s"
 
-BASE_PARAMS = {
-    "i": "warehouse-deals",
+COMMON = {
     "srs": "27972173031",
     "bbn": "27972173031",
-    "s": "popularity-rank",
     "dc": "",
-    "fs": "true",
 }
 
+# كل مفتاح يمثل مسار فحص مستقل
 CATEGORIES = {
-    "fashion": {
-        "name": "الأزياء",
-        "node": "18018165031",
+
+    # =========================
+    # الأزياء - 6 مسارات
+    # =========================
+
+    "fashion_women": {
+        "name": "نساء",
+        "parent": "الأزياء",
+        "mode": "filter",
+        "department": "fashion",
+        "root": "18018165031",
+        "filter": "p_n_g-101015233022111",
+        "value": "96332614031",
+        "rnid": "96332613031",
     },
-    "home_kitchen": {
-        "name": "المنزل والمطبخ",
-        "node": "18021933031",
+
+    "fashion_men": {
+        "name": "رجال",
+        "parent": "الأزياء",
+        "mode": "filter",
+        "department": "fashion",
+        "root": "18018165031",
+        "filter": "p_n_g-101015233022111",
+        "value": "96332615031",
+        "rnid": "96332613031",
     },
-    "home_improvement": {
-        "name": "أدوات وتحسين المنزل",
-        "node": "18021990031",
+
+    "fashion_girls_boys": {
+        "name": "بنات وأولاد",
+        "parent": "الأزياء",
+        "mode": "filter",
+        "department": "fashion",
+        "root": "18018165031",
+        "filter": "p_n_g-101015233022111",
+        # القيمة محفوظة بالترميز الذي ظهر في رابط أمازون
+        "value": "96332618031%7C96332622031",
+        "rnid": "96332613031",
     },
+
+    "fashion_baby": {
+        "name": "الطفل",
+        "parent": "الأزياء",
+        "mode": "filter",
+        "department": "fashion",
+        "root": "18018165031",
+        "filter": "p_n_g-101015233022111",
+        "value": "98208548031",
+        "rnid": "96332613031",
+    },
+
+    "fashion_unisex": {
+        "name": "للجنسين",
+        "parent": "الأزياء",
+        "mode": "filter",
+        "department": "fashion",
+        "root": "18018165031",
+        "filter": "p_n_g-101015233022111",
+        "value": "98208549031",
+        "rnid": "96332613031",
+    },
+
+    "fashion_luggage": {
+        "name": "الأمتعة ومعدات السفر",
+        "parent": "الأزياء",
+        "mode": "node",
+        "department": "fashion",
+        "root": "18018165031",
+        "node": "21845148031",
+        "rnid": "18018165031",
+    },
+
+    # =========================
+    # المنزل والمطبخ - 7 مسارات
+    # =========================
+
+    "home_kitchen_1": {
+        "name": "المنزل والمطبخ - فرع 1",
+        "parent": "المنزل والمطبخ",
+        "mode": "node",
+        "department": "home",
+        "root": "18021933031",
+        "node": "21863792031",
+        "rnid": "18021933031",
+    },
+
+    "home_kitchen_2": {
+        "name": "المنزل والمطبخ - فرع 2",
+        "parent": "المنزل والمطبخ",
+        "mode": "node",
+        "department": "home",
+        "root": "18021933031",
+        "node": "21863794031",
+        "rnid": "18021933031",
+    },
+
+    "home_kitchen_3": {
+        "name": "المنزل والمطبخ - فرع 3",
+        "parent": "المنزل والمطبخ",
+        "mode": "node",
+        "department": "home",
+        "root": "18021933031",
+        "node": "21863798031",
+        "rnid": "18021933031",
+    },
+
+    "home_kitchen_4": {
+        "name": "المنزل والمطبخ - فرع 4",
+        "parent": "المنزل والمطبخ",
+        "mode": "node",
+        "department": "home",
+        "root": "18021933031",
+        "node": "21863791031",
+        "rnid": "18021933031",
+    },
+
+    "home_kitchen_5": {
+        "name": "المنزل والمطبخ - فرع 5",
+        "parent": "المنزل والمطبخ",
+        "mode": "node",
+        "department": "home",
+        "root": "18021933031",
+        "node": "21863800031",
+        "rnid": "18021933031",
+    },
+
+    "home_kitchen_6": {
+        "name": "المنزل والمطبخ - فرع 6",
+        "parent": "المنزل والمطبخ",
+        "mode": "node",
+        "department": "home",
+        "root": "18021933031",
+        "node": "21863799031",
+        "rnid": "18021933031",
+    },
+
+    "home_kitchen_7": {
+        "name": "المنزل والمطبخ - فرع 7",
+        "parent": "المنزل والمطبخ",
+        "mode": "node",
+        "department": "home",
+        "root": "18021933031",
+        "node": "21863790031",
+        "rnid": "18021933031",
+    },
+
+    # =========================
+    # أدوات وتحسين المنزل - 7 مسارات
+    # =========================
+
+    "improvement_1": {
+        "name": "أدوات وتحسين المنزل - فرع 1",
+        "parent": "أدوات وتحسين المنزل",
+        "mode": "node",
+        "department": "home-improvement",
+        "root": "18021990031",
+        "node": "21874765031",
+        "rnid": "18021990031",
+    },
+
+    "improvement_2": {
+        "name": "أدوات وتحسين المنزل - فرع 2",
+        "parent": "أدوات وتحسين المنزل",
+        "mode": "node",
+        "department": "home-improvement",
+        "root": "18021990031",
+        "node": "21874773031",
+        "rnid": "18021990031",
+    },
+
+    "improvement_3": {
+        "name": "أدوات وتحسين المنزل - فرع 3",
+        "parent": "أدوات وتحسين المنزل",
+        "mode": "node",
+        "department": "home-improvement",
+        "root": "18021990031",
+        "node": "21874769031",
+        "rnid": "18021990031",
+    },
+
+    "improvement_4": {
+        "name": "أدوات وتحسين المنزل - فرع 4",
+        "parent": "أدوات وتحسين المنزل",
+        "mode": "node",
+        "department": "home-improvement",
+        "root": "18021990031",
+        "node": "21874766031",
+        "rnid": "18021990031",
+    },
+
+    "improvement_5": {
+        "name": "أدوات وتحسين المنزل - فرع 5",
+        "parent": "أدوات وتحسين المنزل",
+        "mode": "node",
+        "department": "home-improvement",
+        "root": "18021990031",
+        "node": "21874775031",
+        "rnid": "18021990031",
+    },
+
+    "improvement_6": {
+        "name": "أدوات وتحسين المنزل - فرع 6",
+        "parent": "أدوات وتحسين المنزل",
+        "mode": "node",
+        "department": "home-improvement",
+        "root": "18021990031",
+        "node": "21874776031",
+        "rnid": "18021990031",
+    },
+
+    "improvement_7": {
+        "name": "أدوات وتحسين المنزل - فرع 7",
+        "parent": "أدوات وتحسين المنزل",
+        "mode": "node",
+        "department": "home-improvement",
+        "root": "18021990031",
+        "node": "21874767031",
+        "rnid": "18021990031",
+    },
+
+    # =========================
+    # أقسام مستقلة
+    # =========================
+
     "grocery": {
         "name": "سوبر ماركت",
-        "node": "18020637031",
+        "parent": "سوبر ماركت",
+        "mode": "standalone",
+        "department": None,
+        "root": "18020637031",
     },
+
     "baby": {
         "name": "منتجات الأطفال",
-        "node": "18017931031",
+        "parent": "منتجات الأطفال",
+        "mode": "standalone",
+        "department": None,
+        "root": "18017931031",
     },
 }
 
 
-def build_start_url(category_key: str | None = None) -> str:
-    params = dict(BASE_PARAMS)
+def build_start_url(category_key: str) -> str:
+    if category_key not in CATEGORIES:
+        raise ValueError(f"Unknown category: {category_key}")
 
-    if category_key:
-        if category_key not in CATEGORIES:
-            raise ValueError(f"Unknown category: {category_key}")
+    category = CATEGORIES[category_key]
+    params = dict(COMMON)
 
+    if category["mode"] == "filter":
+        params["i"] = category["department"]
+        params["rh"] = (
+            f"n:{category['root']},"
+            f"{category['filter']}:{category['value']}"
+        )
+        params["rnid"] = category["rnid"]
+
+    elif category["mode"] == "node":
+        params["i"] = category["department"]
+        params["rh"] = (
+            f"n:{category['root']},"
+            f"n:27972173031,"
+            f"n:{category['node']}"
+        )
+        params["rnid"] = category["rnid"]
+
+    else:
         params["rh"] = (
             f"n:27972173031,"
-            f"n:{CATEGORIES[category_key]['node']}"
+            f"n:{category['root']}"
         )
-        params["rnid"] = "27972173031"
-    else:
-        params["rh"] = "n:27972173031"
-        params["rnid"] = "27972173031"
+        params["rnid"] = "26263709031"
 
     return BASE_URL + "?" + urlencode(params)
 
@@ -135,23 +366,26 @@ def _get_image(card):
     if not img:
         return None
 
-    image = (
-        img.get("src")
-        or img.get("data-src")
-        or img.get("data-old-hires")
-    )
+    for attribute in (
+        "data-old-hires",
+        "src",
+        "data-src",
+    ):
+        image = img.get(attribute)
 
-    if image and image.startswith("//"):
-        image = "https:" + image
+        if image and image.startswith("//"):
+            image = "https:" + image
 
-    if image:
-        return image
+        if image and image.startswith("http"):
+            return image
 
     dynamic = img.get("data-a-dynamic-image")
 
     if dynamic:
         try:
-            return next(iter(json.loads(dynamic)))
+            images = json.loads(dynamic)
+            if images:
+                return next(iter(images))
         except (ValueError, TypeError, StopIteration):
             pass
 
@@ -307,6 +541,5 @@ def extract_next_page_url(
             if next_page > current_page:
                 return candidate
 
-    # لا ننشئ صفحات افتراضية.
-    # غياب رابط التالي يعني أن أمازون لم يقدم رابطًا صالحًا.
+    # لا نصنع صفحات افتراضية.
     return None
