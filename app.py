@@ -42,6 +42,9 @@ ROOT = Path(__file__).resolve().parent
 
 DB_PATH = ROOT / "resale_v2.db"
 
+# الحد الأقصى للمنتجات المحفوظة
+MAX_STORED_PRODUCTS = 200
+
 # السماح بفاصل 30 ثانية
 INTERVAL_SECONDS = max(
     30,
@@ -92,7 +95,7 @@ def utc_now() -> str:
 
 
 # ==========================================
-# قاعدة البيانات والترقيات
+# قاعدة البيانات
 # ==========================================
 
 def connect():
@@ -100,6 +103,58 @@ def connect():
     db.row_factory = sqlite3.Row
     return db
 
+
+# ==========================================
+# الاحتفاظ بأحدث 200 منتج فقط
+# ==========================================
+
+def prune_old_products(db):
+    """
+    Keep only the newest 200 products.
+
+    Older products and their category associations
+    are deleted.
+
+    Scan states and application metadata are preserved.
+    """
+
+    # حذف ارتباطات المنتجات الأقدم
+    db.execute("""
+        DELETE FROM product_categories
+        WHERE asin IN (
+            SELECT asin
+            FROM products
+            ORDER BY first_seen DESC, rowid DESC
+            LIMIT -1 OFFSET ?
+        )
+    """, (MAX_STORED_PRODUCTS,))
+
+    # حذف المنتجات الأقدم
+    cursor = db.execute("""
+        DELETE FROM products
+        WHERE asin IN (
+            SELECT asin
+            FROM products
+            ORDER BY first_seen DESC, rowid DESC
+            LIMIT -1 OFFSET ?
+        )
+    """, (MAX_STORED_PRODUCTS,))
+
+    deleted = cursor.rowcount
+
+    if deleted:
+        logger.info(
+            "Product cleanup: deleted=%s | limit=%s",
+            deleted,
+            MAX_STORED_PRODUCTS
+        )
+
+    return deleted
+
+
+# ==========================================
+# تهيئة قاعدة البيانات والترقيات
+# ==========================================
 
 def init_db():
 
@@ -203,6 +258,9 @@ def init_db():
                 "Pagination migration completed"
             )
 
+        # تنظيف المنتجات مع الحفاظ على مؤشرات الفحص
+        prune_old_products(db)
+
         db.commit()
 
     logger.info(
@@ -221,7 +279,6 @@ def is_explicit_end_page(html: str) -> bool:
     if not html:
         return False
 
-    # نبحث عن علامات واضحة لصفحة عدم وجود نتائج
     if re.search(
         r'class=["\'][^"\']*s-no-results',
         html,
@@ -454,6 +511,9 @@ def save_products(
                 now
             ))
 
+        # الاحتفاظ بأحدث 200 منتج
+        prune_old_products(db)
+
         db.commit()
 
     logger.info(
@@ -632,8 +692,6 @@ def scan_route(category_key: str) -> dict:
 
         else:
 
-            # إذا ظهر رابط جديد بعد اكتمال سابق،
-            # نعيد فتح المسار لمتابعة النتائج.
             if was_completed and first_next:
                 saved_next_url = None
                 current_blocked_url = None
@@ -666,7 +724,6 @@ def scan_route(category_key: str) -> dict:
 
             else:
 
-                # لا نكرر طلب صفحة متوقفة بنفس الرابط
                 if deep_url == current_blocked_url:
 
                     next_cursor = deep_url
@@ -707,8 +764,6 @@ def scan_route(category_key: str) -> dict:
 
                         else:
 
-                            # لا نعلن اكتمال المسار.
-                            # نحتفظ بالرابط المتوقف دون اختراع صفحة.
                             next_cursor = deep_url
                             completed = False
                             current_blocked_url = deep_url
@@ -742,7 +797,6 @@ def scan_route(category_key: str) -> dict:
 
                         else:
 
-                            # لا نفترض أن غياب الرابط يعني النهاية.
                             next_cursor = deep_url
                             completed = False
                             current_blocked_url = deep_url
