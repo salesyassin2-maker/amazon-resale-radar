@@ -26,7 +26,6 @@ from scraper import (
     parse_resale_html,
 )
 
-
 # ==========================================
 # الإعدادات العامة
 # ==========================================
@@ -35,30 +34,18 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s"
 )
-
 logger = logging.getLogger("resale-radar-v2")
 
 ROOT = Path(__file__).resolve().parent
-
 DB_PATH = ROOT / "resale_v2.db"
 
-# الحد الأقصى للمنتجات المحفوظة
 MAX_STORED_PRODUCTS = 200
 
-# السماح بفاصل 30 ثانية
 INTERVAL_SECONDS = max(
-    30,
-    int(os.getenv("CHECK_INTERVAL_SECONDS", "300"))
+    30, int(os.getenv("CHECK_INTERVAL_SECONDS", "300"))
 )
-
-REQUEST_TIMEOUT = int(
-    os.getenv("REQUEST_TIMEOUT_SECONDS", "30")
-)
-
-PAGE_DELAY = max(
-    1,
-    int(os.getenv("PAGE_DELAY_SECONDS", "2"))
-)
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
+PAGE_DELAY = max(1, int(os.getenv("PAGE_DELAY_SECONDS", "2")))
 
 app = FastAPI(title="Amazon Resale Radar")
 
@@ -72,7 +59,6 @@ scheduler = BackgroundScheduler(timezone="UTC")
 scan_lock = threading.Lock()
 
 session = requests.Session()
-
 session.headers.update({
     "User-Agent": os.getenv(
         "AMAZON_USER_AGENT",
@@ -101,24 +87,17 @@ def utc_now() -> str:
 def connect():
     db = sqlite3.connect(DB_PATH, timeout=30)
     db.row_factory = sqlite3.Row
+    db.execute("PRAGMA foreign_keys = ON")
     return db
 
 
 # ==========================================
-# الاحتفاظ بأحدث 200 منتج فقط
+# الاحتفاظ بأحدث 200 منتج
 # ==========================================
 
 def prune_old_products(db):
-    """
-    Keep only the newest 200 products.
+    """حذف المنتجات الأقدم من قائمة العرض فقط."""
 
-    Older products and their category associations
-    are deleted.
-
-    Scan states and application metadata are preserved.
-    """
-
-    # حذف ارتباطات المنتجات الأقدم
     db.execute("""
         DELETE FROM product_categories
         WHERE asin IN (
@@ -129,7 +108,6 @@ def prune_old_products(db):
         )
     """, (MAX_STORED_PRODUCTS,))
 
-    # حذف المنتجات الأقدم
     cursor = db.execute("""
         DELETE FROM products
         WHERE asin IN (
@@ -182,6 +160,14 @@ def init_db():
             )
         """)
 
+        # سجل الذاكرة الدائمة للمنتجات المكتشفة
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS seen_products (
+                asin TEXT PRIMARY KEY,
+                first_seen TEXT NOT NULL
+            )
+        """)
+
         db.execute("""
             CREATE TABLE IF NOT EXISTS scan_state (
                 category_key TEXT PRIMARY KEY,
@@ -201,7 +187,6 @@ def init_db():
             )
         """)
 
-        # إضافة عمود التوقف المؤقت إن لم يكن موجودًا
         columns = {
             row["name"]
             for row in db.execute(
@@ -225,15 +210,26 @@ def init_db():
             ON product_categories(category_key)
         """)
 
-        # إنشاء مؤشر مستقل لكل مسار
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_seen_products_first_seen
+            ON seen_products(first_seen)
+        """)
+
+        # إنشاء المسارات الناقصة فقط
         for key in CATEGORIES:
             db.execute("""
                 INSERT OR IGNORE INTO scan_state(category_key)
                 VALUES (?)
             """, (key,))
 
-        # ترقية واحدة فقط:
-        # إعادة فتح المسارات التي أُغلقت بالمنطق القديم
+        # نقل المنتجات الموجودة إلى سجل الذاكرة
+        db.execute("""
+            INSERT OR IGNORE INTO seen_products (asin, first_seen)
+            SELECT asin, first_seen
+            FROM products
+        """)
+
+        # ترقية ترقيم الصفحات الأصلية
         migration = db.execute("""
             SELECT value
             FROM app_meta
@@ -241,7 +237,6 @@ def init_db():
         """).fetchone()
 
         if not migration:
-
             db.execute("""
                 UPDATE scan_state
                 SET completed=0,
@@ -254,19 +249,17 @@ def init_db():
                 VALUES ('pagination_logic_v2', '1')
             """)
 
-            logger.info(
-                "Pagination migration completed"
-            )
+            logger.info("Pagination migration completed")
 
-        # تنظيف المنتجات مع الحفاظ على مؤشرات الفحص
+        # تنظيف المنتجات الحالية مع الحفاظ على سجل الذاكرة
         prune_old_products(db)
-
         db.commit()
 
     logger.info(
-        "Database initialized: %s | routes=%s",
+        "Database initialized: %s | routes=%s | limit=%s",
         DB_PATH,
-        len(CATEGORIES)
+        len(CATEGORIES),
+        MAX_STORED_PRODUCTS
     )
 
 
@@ -286,8 +279,7 @@ def is_explicit_end_page(html: str) -> bool:
     ):
         return True
 
-    text = re.sub(r"<[^>]+>", " ", html)
-    text = text.lower()
+    text = re.sub(r"<[^>]+>", " ", html).lower()
 
     markers = (
         "we couldn't find any results",
@@ -371,7 +363,6 @@ def fetch_url(url: str) -> tuple[str, str]:
     for attempt in range(1, 4):
 
         try:
-
             response = session.get(
                 url,
                 timeout=REQUEST_TIMEOUT
@@ -394,7 +385,6 @@ def fetch_url(url: str) -> tuple[str, str]:
             response.raise_for_status()
 
             final_url = response.url
-
             html = response.text
             lowered = html.lower()
 
@@ -411,7 +401,6 @@ def fetch_url(url: str) -> tuple[str, str]:
             return html, final_url
 
         except requests.RequestException:
-
             logger.exception(
                 "Amazon request failed, attempt=%s",
                 attempt
@@ -453,6 +442,7 @@ def save_products(
 
             if exists:
 
+                # تحديث المنتج الموجود
                 db.execute("""
                     UPDATE products
                     SET title=?,
@@ -471,8 +461,44 @@ def save_products(
                     asin
                 ))
 
+                # ضمان وجوده في سجل الذاكرة
+                db.execute("""
+                    INSERT OR IGNORE INTO seen_products (
+                        asin, first_seen
+                    )
+                    SELECT asin, first_seen
+                    FROM products
+                    WHERE asin=?
+                """, (asin,))
+
+                db.execute("""
+                    INSERT OR IGNORE INTO product_categories (
+                        asin, category_key, first_seen
+                    )
+                    VALUES (?, ?, ?)
+                """, (asin, category_key, now))
+
             else:
 
+                # هل سبق اكتشافه ثم حذفه من قائمة العرض؟
+                previously_seen = db.execute("""
+                    SELECT 1
+                    FROM seen_products
+                    WHERE asin=?
+                """, (asin,)).fetchone()
+
+                if previously_seen:
+                    continue
+
+                # تسجيل المنتج الجديد في الذاكرة الدائمة
+                db.execute("""
+                    INSERT INTO seen_products (
+                        asin, first_seen
+                    )
+                    VALUES (?, ?)
+                """, (asin, now))
+
+                # إضافة المنتج إلى قائمة العرض
                 db.execute("""
                     INSERT INTO products (
                         asin,
@@ -495,25 +521,17 @@ def save_products(
                     now
                 ))
 
+                db.execute("""
+                    INSERT OR IGNORE INTO product_categories (
+                        asin, category_key, first_seen
+                    )
+                    VALUES (?, ?, ?)
+                """, (asin, category_key, now))
+
                 inserted += 1
 
-            # المنتج يمكن أن يرتبط بأكثر من مسار
-            db.execute("""
-                INSERT OR IGNORE INTO product_categories (
-                    asin,
-                    category_key,
-                    first_seen
-                )
-                VALUES (?, ?, ?)
-            """, (
-                asin,
-                category_key,
-                now
-            ))
-
-        # الاحتفاظ بأحدث 200 منتج
+        # حذف الأقدم من قائمة العرض فقط
         prune_old_products(db)
-
         db.commit()
 
     logger.info(
@@ -543,7 +561,6 @@ def update_scan_state(
     with closing(connect()) as db:
 
         if error is None:
-
             db.execute("""
                 UPDATE scan_state
                 SET next_url=?,
@@ -565,8 +582,6 @@ def update_scan_state(
             ))
 
         else:
-
-            # لا نمسح آخر توقيت فحص ناجح عند الخطأ
             db.execute("""
                 UPDATE scan_state
                 SET next_url=?,
@@ -599,7 +614,6 @@ def scan_route(category_key: str) -> dict:
         raise ValueError("Unknown category")
 
     with closing(connect()) as db:
-
         state = db.execute("""
             SELECT *
             FROM scan_state
@@ -627,12 +641,8 @@ def scan_route(category_key: str) -> dict:
 
     try:
 
-        # ----------------------------------
-        # أولاً: فحص الصفحة الأولى دائمًا
-        # ----------------------------------
-
+        # فحص الصفحة الأولى دائمًا
         html, final_url = fetch_url(first_url)
-
         validate_route_url(first_url, final_url)
 
         first_products = parse_resale_html(html)
@@ -640,7 +650,6 @@ def scan_route(category_key: str) -> dict:
         if not first_products:
 
             if is_explicit_end_page(html):
-
                 update_scan_state(
                     category_key,
                     None,
@@ -667,25 +676,15 @@ def scan_route(category_key: str) -> dict:
                 "pagination state preserved"
             )
 
-        first_next = extract_next_page_url(
-            html,
-            final_url
-        )
+        first_next = extract_next_page_url(html, final_url)
 
-        new += save_products(
-            first_products,
-            category_key
-        )
+        new += save_products(first_products, category_key)
 
         pages += 1
         parsed += len(first_products)
 
-        # ----------------------------------
         # المسار المكتمل سابقًا
-        # ----------------------------------
-
         if was_completed and not first_next:
-
             next_cursor = None
             completed = True
             current_blocked_url = None
@@ -696,12 +695,13 @@ def scan_route(category_key: str) -> dict:
                 saved_next_url = None
                 current_blocked_url = None
 
-            # اختيار المؤشر المستقل لهذا المسار
             if saved_next_url and saved_next_url != current_blocked_url:
                 deep_url = saved_next_url
+
             elif first_next and first_next != current_blocked_url:
                 deep_url = first_next
                 current_blocked_url = None
+
             else:
                 deep_url = None
 
@@ -725,49 +725,36 @@ def scan_route(category_key: str) -> dict:
             else:
 
                 if deep_url == current_blocked_url:
-
                     next_cursor = deep_url
                     completed = False
-
                     error = (
                         "Pagination paused: this page needs "
                         "further validation"
                     )
 
                 else:
-
                     next_cursor = deep_url
 
                     time.sleep(PAGE_DELAY)
 
-                    deep_html, deep_final_url = fetch_url(
-                        deep_url
-                    )
+                    deep_html, deep_final_url = fetch_url(deep_url)
 
-                    validate_route_url(
-                        first_url,
-                        deep_final_url
-                    )
+                    validate_route_url(first_url, deep_final_url)
 
-                    deep_products = parse_resale_html(
-                        deep_html
-                    )
+                    deep_products = parse_resale_html(deep_html)
 
                     if not deep_products:
 
                         if is_explicit_end_page(deep_html):
-
                             next_cursor = None
                             completed = True
                             current_blocked_url = None
                             error = None
 
                         else:
-
                             next_cursor = deep_url
                             completed = False
                             current_blocked_url = deep_url
-
                             error = (
                                 "Pagination paused: deep page "
                                 "returned no parseable products"
@@ -789,18 +776,15 @@ def scan_route(category_key: str) -> dict:
                         parsed += len(deep_products)
 
                         if deep_next:
-
                             next_cursor = deep_next
                             completed = False
                             current_blocked_url = None
                             error = None
 
                         else:
-
                             next_cursor = deep_url
                             completed = False
                             current_blocked_url = deep_url
-
                             error = (
                                 "Pagination paused: no verified "
                                 "next-page link was found"
@@ -825,7 +809,6 @@ def scan_route(category_key: str) -> dict:
             category_key
         )
 
-        # لا نغيّر مؤشر الصفحة عند فشل الطلب
         update_scan_state(
             category_key=category_key,
             next_url=next_cursor,
@@ -866,11 +849,9 @@ def run_check() -> dict:
         }
 
     try:
-
         results = []
 
         for key in CATEGORIES:
-
             result = scan_route(key)
             results.append(result)
 
@@ -878,28 +859,16 @@ def run_check() -> dict:
             "routes": results,
             "routes_count": len(results),
             "pages_scanned": sum(
-                item["pages_scanned"]
-                for item in results
+                item["pages_scanned"] for item in results
             ),
-            "parsed": sum(
-                item["parsed"]
-                for item in results
-            ),
-            "new": sum(
-                item["new"]
-                for item in results
-            ),
+            "parsed": sum(item["parsed"] for item in results),
+            "new": sum(item["new"] for item in results),
             "errors": sum(
-                1 for item in results
-                if item["error"]
+                1 for item in results if item["error"]
             )
         }
 
-        logger.info(
-            "Scan cycle finished: %s",
-            summary
-        )
-
+        logger.info("Scan cycle finished: %s", summary)
         return summary
 
     finally:
@@ -920,7 +889,6 @@ def startup():
         DB_PATH
     )
 
-    # الجدولة متوقفة افتراضيًا
     if os.getenv("RUN_SCHEDULER", "0") == "1":
 
         scheduler.add_job(
@@ -957,7 +925,6 @@ def shutdown():
 
 @app.get("/")
 def home():
-
     return FileResponse(
         ROOT / "templates" / "index.html"
     )
@@ -1021,8 +988,7 @@ def products(category: str | None = None):
         if category and category not in CATEGORIES:
 
             parents = {
-                value["parent"]
-                for value in CATEGORIES.values()
+                value["parent"] for value in CATEGORIES.values()
             }
 
             if category not in parents:
@@ -1106,6 +1072,10 @@ def status():
             "SELECT COUNT(*) FROM products"
         ).fetchone()[0]
 
+        seen_count = db.execute(
+            "SELECT COUNT(*) FROM seen_products"
+        ).fetchone()[0]
+
         route_count = db.execute(
             "SELECT COUNT(*) FROM scan_state"
         ).fetchone()[0]
@@ -1123,6 +1093,8 @@ def status():
         "system": "Amazon Resale Radar 2.0",
         "database": DB_PATH.name,
         "saved_products": count,
+        "max_stored_products": MAX_STORED_PRODUCTS,
+        "ever_seen_products": seen_count,
         "routes_count": route_count,
         "interval_seconds": INTERVAL_SECONDS,
         "scheduler_running": scheduler.running,
